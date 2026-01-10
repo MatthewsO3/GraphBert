@@ -27,7 +27,6 @@ def find_project_root(start_path: Path = None) -> Path:
 
 
 def load_config() -> dict:
-    """Load config.json from project root."""
     project_root = find_project_root()
     config_path = project_root / 'config.json'
 
@@ -144,7 +143,6 @@ Examples:
         }
     }
 
-    # Determine which stages to run
     stage_order = ['data', 'training', 'evaluation', 'loss_plot', 'metrics_plot']
     start_idx = stage_order.index(args.stage) if args.stage in stage_order else 0
 
@@ -167,7 +165,6 @@ Examples:
             print(f"  Would run: {' '.join(stages[stage]['cmd'])}")
         sys.exit(0)
 
-    # Run pipeline
     results = {}
     for stage in stages_to_run:
         stage_info = stages[stage]
@@ -179,7 +176,6 @@ Examples:
             print(f"Fix the error and run: python run.py --stage {stage}")
             break
 
-    # Summary
     print(f"\n{'=' * 70}")
     print("Pipeline Summary".center(70))
     print("=" * 70)
@@ -201,9 +197,9 @@ Examples:
         if not args.skip_plotting:
             print("  - graphcodebert_all_metrics.png (training)")
             if not args.skip_evaluation:
-                print("  - graphcodebert_eval_accuracy.png")
-                print("  - graphcodebert_eval_perplexity.png")
-                print("  - graphcodebert_eval_combined.png")
+                print("  - accuracy.png")
+                print("  - perplexity.png")
+                print("  - combined.png")
         print()
         sys.exit(0)
     else:

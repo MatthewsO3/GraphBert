@@ -1,9 +1,3 @@
-"""
-Evaluate a trained GraphCodeBERT model on MLM task with C++ code snippets.
-Fetches test snippets from codeparrot database and aggregates metrics.
-Compatible with current project structure and config.
-"""
-
 import json
 import os
 import random
@@ -33,7 +27,6 @@ torch.manual_seed(42)
 
 
 def find_project_root(start_path: Path = None) -> Path:
-    """Find project root by looking for config.json."""
     if start_path is None:
         start_path = Path(__file__).parent.absolute()
 
@@ -53,7 +46,6 @@ def find_project_root(start_path: Path = None) -> Path:
 
 
 def load_config() -> Dict:
-    """Load config.json from project root."""
     project_root = find_project_root()
     config_path = project_root / 'config.json'
 
@@ -65,7 +57,6 @@ def load_config() -> Dict:
 
 
 def should_keep_code(code: str) -> bool:
-    """Filter criteria for C++ code."""
     if not code:
         return False
     if len(code) < 100 or len(code) > 10000:
@@ -80,10 +71,6 @@ def should_keep_code(code: str) -> bool:
 
 def fetch_test_snippets_from_db(skip_n: int, take_n: int, tokenizer: RobertaTokenizer, max_tokens: int = 100) -> List[
     str]:
-    """
-    Fetches valid C++ snippets from the database, skipping the training data.
-    Filters out low-quality snippets and those exceeding token length.
-    """
     print(f"Fetching {take_n} test snippets from 'codeparrot/github-code-clean'...")
     print(f"Skipping first {skip_n} samples (training data)")
     print(f"Max tokens per snippet: {max_tokens}")
@@ -104,20 +91,18 @@ def fetch_test_snippets_from_db(skip_n: int, take_n: int, tokenizer: RobertaToke
             snippets.append(example['code'])
 
         if not snippets:
-            print("\n⚠️  Warning: Could not fetch any valid snippets matching criteria.")
+            print("\nWarning: Could not fetch any valid snippets matching criteria.")
             print(f"Try reducing 'training_data_size' in config.json or checking internet connection.\n")
         else:
-            print(f"✓ Successfully fetched {len(snippets)} snippets for evaluation.\n")
+            print(f"Successfully fetched {len(snippets)} snippets for evaluation.\n")
 
         return snippets
     except Exception as e:
-        print(f"❌ Error fetching data from Hub: {e}")
+        print(f"Error fetching data from Hub: {e}")
         return []
 
 
 class MLMEvaluator:
-    """Evaluates MLM task using trained GraphCodeBERT model."""
-
     def __init__(self, model_path: str, tokenizer: RobertaTokenizer, device: Optional[str] = None):
         if not TS_AVAILABLE:
             raise RuntimeError("Tree-sitter is required for evaluation.")
@@ -128,10 +113,9 @@ class MLMEvaluator:
 
         self.tokenizer = tokenizer
         self.model = RobertaForMaskedLM.from_pretrained(model_path).to(self.device).eval()
-        print("✓ Model loaded successfully!\n")
+        print("Model loaded successfully!\n")
 
     def extract_dfg_for_snippet(self, code_bytes: bytes) -> List[Tuple]:
-        """Extract DFG from code using tree-sitter."""
         tree = ts_parser.parse(code_bytes)
         root = tree.root_node
         defs, uses = defaultdict(list), defaultdict(list)
@@ -174,7 +158,6 @@ class MLMEvaluator:
         return edges
 
     def preprocess_for_graphcodebert(self, code: str, masked_code_tokens: List[str]):
-        """Preprocess code for GraphCodeBERT with DFG."""
         dfg = self.extract_dfg_for_snippet(code.encode('utf8'))
         adj, nodes, node_map = defaultdict(list), [], {}
 
@@ -220,7 +203,6 @@ class MLMEvaluator:
         }
 
     def evaluate_snippet(self, code: str, mask_ratio: float, top_k: int) -> Optional[Dict]:
-        """Evaluate MLM on a single code snippet."""
         code_tokens = self.tokenizer.tokenize(code, add_prefix_space=True)
         if not code_tokens:
             return None
@@ -269,10 +251,8 @@ class MLMEvaluator:
 
 
 def save_evaluation_results(results: Dict, output_path: Path):
-    """Save evaluation results to JSON file."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Convert numpy arrays/floats to native Python types for JSON serialization
     results_serializable = {
         'snippets_evaluated': results['snippets_evaluated'],
         'total_masked_tokens': results['total_masked_tokens'],
@@ -287,11 +267,10 @@ def save_evaluation_results(results: Dict, output_path: Path):
     with open(output_path, 'w') as f:
         json.dump(results_serializable, f, indent=2)
 
-    print(f"✓ Evaluation results saved to: {output_path}")
+    print(f"Evaluation results saved to: {output_path}")
 
 
 def main():
-    """Main evaluation function."""
     import argparse
 
     parser = argparse.ArgumentParser(description='Evaluate GraphCodeBERT MLM model on C++')
@@ -300,15 +279,13 @@ def main():
     parser.add_argument('--use_database_snippets', action='store_true', help='Fetch snippets from database')
     parser.add_argument('--model_checkpoint', type=str, default='best_model', help='Model checkpoint name')
 
-    # Load config
     try:
         config = load_config()
         project_root = find_project_root()
     except FileNotFoundError as e:
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")
         exit(1)
 
-    # Get evaluate config
     eval_config = config.get('evaluate', {})
     parser.set_defaults(**eval_config)
     args = parser.parse_args()
@@ -322,21 +299,18 @@ def main():
         print(f"  {k}: {v}")
     print("=" * 70 + "\n")
 
-    # Load tokenizer
     print("Loading tokenizer from 'microsoft/graphcodebert-base'...")
     tokenizer = RobertaTokenizer.from_pretrained("microsoft/graphcodebert-base")
 
-    # Get model path
     output_dir = project_root / config.get('train', {}).get('output_dir', 'results')
     model_path = output_dir / args.model_checkpoint
 
     if not model_path.exists():
-        print(f"❌ Error: Model checkpoint not found at {model_path}")
+        print(f"Error: Model checkpoint not found at {model_path}")
         exit(1)
 
     print(f"Model path: {model_path}\n")
 
-    # Fetch or prepare snippets
     snippets_to_evaluate = []
     if args.use_database_snippets:
         training_data_size = eval_config.get('training_data_size')
@@ -344,7 +318,7 @@ def main():
         max_tokens = eval_config.get('max_tokens_per_snippet', 100)
 
         if training_data_size is None or num_test_snippets is None:
-            print("❌ Error: 'training_data_size' and 'num_test_snippets' required for database snippets.")
+            print("Error: 'training_data_size' and 'num_test_snippets' required for database snippets.")
             exit(1)
 
         snippets_to_evaluate = fetch_test_snippets_from_db(
@@ -354,17 +328,15 @@ def main():
             max_tokens=max_tokens
         )
     else:
-        print("❌ Error: No evaluation snippets configured. Set 'use_database_snippets' to true.")
+        print("Error: No evaluation snippets configured. Set 'use_database_snippets' to true.")
         exit(1)
 
     if not snippets_to_evaluate:
-        print("❌ No snippets to evaluate. Exiting.")
+        print("No snippets to evaluate. Exiting.")
         exit(1)
 
-    # Initialize evaluator
     evaluator = MLMEvaluator(str(model_path), tokenizer=tokenizer)
 
-    # Aggregate results
     aggregated_results = {
         'total_top1_correct': 0,
         'total_top5_correct': 0,
@@ -384,7 +356,6 @@ def main():
             aggregated_results['all_log_probs'].extend(results['log_probs'])
 
 
-    # Calculate final metrics
     if aggregated_results['total_masked'] > 0:
         total_masked = aggregated_results['total_masked']
         top1_acc = aggregated_results['total_top1_correct'] / total_masked
@@ -418,7 +389,6 @@ def main():
         print(f"Perplexity:             {perplexity:.4f}")
         print("=" * 70 + "\n")
 
-        # Save results
         results_path = output_dir / 'evaluation_results.json'
         save_evaluation_results(results_dict, results_path)
     else:

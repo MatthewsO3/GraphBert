@@ -1,9 +1,3 @@
-"""
-Training script for GraphCodeBERT with MLM + Edge Prediction tasks.
-Implements the dual-objective pre-training from GraphCodeBERT paper.
-OPTIMIZED VERSION with early stopping, dropout, mixed precision, and weight decay.
-WITH COMPREHENSIVE LOSS AND PERFORMANCE TRACKING
-"""
 import argparse
 import csv
 import json
@@ -11,10 +5,8 @@ import os
 import random
 from pathlib import Path
 from typing import Dict, Tuple
-
 import numpy as np
 import torch
-import torch.nn as nn
 from torch.cuda.amp import GradScaler
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
@@ -25,7 +17,6 @@ from model import GraphCodeBERTDataset, GraphCodeBERTWithEdgePrediction, MLMWith
 
 
 def set_seed(seed=42):
-    """Set random seeds for reproducibility"""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -34,7 +25,6 @@ def set_seed(seed=42):
 
 
 class PerformanceTracker:
-    """Tracks and saves all performance metrics during training."""
     def __init__(self, output_dir: str, patience: int = 3):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -62,7 +52,6 @@ class PerformanceTracker:
         }
 
     def log_batch(self, phase: str, total_loss, mlm_loss, edge_loss):
-        """Log individual batch metrics."""
         if phase == 'train':
             self.history['train_batch_losses'].append(total_loss)
             self.history['train_mlm_batch_losses'].append(mlm_loss if mlm_loss else 0)
@@ -73,7 +62,6 @@ class PerformanceTracker:
             self.history['val_edge_batch_losses'].append(edge_loss if edge_loss else 0)
 
     def log_epoch(self, epoch: int, phase: str, total_loss, mlm_loss, edge_loss, lr=None):
-        """Log epoch-level metrics."""
         if phase == 'train':
             self.history['epoch'].append(epoch)
             self.history['train_total_loss'].append(total_loss)
@@ -87,7 +75,6 @@ class PerformanceTracker:
             self.history['val_edge_loss'].append(edge_loss)
 
     def update_best(self, val_loss, epoch):
-        """Update best validation loss and handle early stopping."""
         if val_loss < self.best_val_loss:
             self.best_val_loss = val_loss
             self.history['best_val_loss'] = val_loss
@@ -99,11 +86,9 @@ class PerformanceTracker:
             return False
 
     def should_stop_early(self) -> bool:
-        """Check if training should stop early."""
         return self.patience_counter >= self.patience
 
     def _compute_summary(self) -> Dict:
-        """Compute summary statistics."""
         return {
             'total_epochs': len(self.history['epoch']),
             'best_epoch': self.history['best_epoch'],
@@ -121,22 +106,19 @@ class PerformanceTracker:
         }
 
     def _save_history_json(self):
-        """Save training history to JSON."""
         history_path = self.output_dir / 'training_history.json'
         with open(history_path, 'w') as f:
             json.dump(self.history, f, indent=2)
-        print(f"✓ Saved training history to {history_path}")
+        print(f"Saved training history to {history_path}")
 
     def _save_summary_json(self):
-        """Save training summary to JSON."""
         summary = self._compute_summary()
         summary_path = self.output_dir / 'training_summary.json'
         with open(summary_path, 'w') as f:
             json.dump(summary, f, indent=2)
-        print(f"✓ Saved training summary to {summary_path}")
+        print(f"Saved training summary to {summary_path}")
 
     def _save_metrics_csv(self):
-        """Save epoch-level metrics as CSV."""
         try:
             csv_path = self.output_dir / 'training_metrics.csv'
             with open(csv_path, 'w', newline='') as f:
@@ -156,19 +138,17 @@ class PerformanceTracker:
                         self.history['val_edge_loss'][i] if i < len(self.history['val_edge_loss']) else '',
                         self.history['learning_rate'][i] if i < len(self.history['learning_rate']) else '',
                     ])
-            print(f"✓ Saved metrics CSV to {csv_path}")
+            print(f"Saved metrics CSV to {csv_path}")
         except Exception as e:
-            print(f"⚠️ Could not save CSV: {e}")
+            print(f"Could not save CSV: {e}")
 
     def save(self):
-        """Save all metrics to files."""
         self._save_history_json()
         self._save_summary_json()
         self._save_metrics_csv()
 
 
 class ModelCheckpointManager:
-    """Manages model checkpoints and best model saving."""
     def __init__(self, output_dir: str, keep_last_n: int = 2):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -180,7 +160,6 @@ class ModelCheckpointManager:
         self.checkpoint_list = []
 
     def save_checkpoint(self, model: GraphCodeBERTWithEdgePrediction, tokenizer: RobertaTokenizer, epoch: int):
-        """Save a checkpoint for the current epoch."""
         checkpoint_dir = self.checkpoints_dir / f'epoch_{epoch:03d}'
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -189,32 +168,27 @@ class ModelCheckpointManager:
 
         self.checkpoint_list.append(checkpoint_dir)
 
-        # Remove old checkpoints if we exceed keep_last_n
         if len(self.checkpoint_list) > self.keep_last_n:
             old_checkpoint = self.checkpoint_list.pop(0)
             import shutil
             shutil.rmtree(old_checkpoint)
-            print(f"  Removed old checkpoint: {old_checkpoint}")
+            print(f"Removed old checkpoint: {old_checkpoint}")
 
-        print(f"✓ Saved checkpoint to {checkpoint_dir}")
+        print(f"Saved checkpoint to {checkpoint_dir}")
 
     def save_best_model(self, model: GraphCodeBERTWithEdgePrediction, tokenizer: RobertaTokenizer):
-        """Save the best model found during training."""
         model.save_pretrained(str(self.best_model_dir))
         tokenizer.save_pretrained(str(self.best_model_dir))
-        print(f"✓ Saved best model to {self.best_model_dir}")
+        print(f"Saved best model to {self.best_model_dir}")
 
     def get_best_model_path(self) -> str:
-        """Get path to best model directory."""
         return str(self.best_model_dir)
 
     def get_checkpoint_paths(self) -> list:
-        """Get list of saved checkpoint paths."""
         return [str(cp) for cp in self.checkpoint_list]
 
 
 def setup_device():
-    """Setup and return device for training."""
     if torch.backends.mps.is_available():
         device = torch.device("mps")
         print("Using Apple Silicon GPU (MPS)")
@@ -232,7 +206,6 @@ def setup_device():
 
 
 def find_project_root(start_path: Path = None) -> Path:
-    """Find project root by looking for config.json."""
     if start_path is None:
         start_path = Path(__file__).parent.absolute()
 
@@ -252,7 +225,6 @@ def find_project_root(start_path: Path = None) -> Path:
 
 
 def load_config_and_set_defaults(parser):
-    """Load config from config.json and set as parser defaults."""
     project_root = find_project_root()
     config_path = project_root / 'config.json'
 
@@ -261,20 +233,18 @@ def load_config_and_set_defaults(parser):
             config_data = json.load(f)
             train_config = config_data.get("train", {})
             parser.set_defaults(**train_config)
-        print(f"✓ Loaded config from: {config_path}")
+        print(f"Loaded config from: {config_path}")
         return project_root
     else:
         raise FileNotFoundError(f"config.json not found at {config_path}")
 
 
 def setup_model_and_data(args, device, project_root):
-    """Setup tokenizer, model, and dataloaders."""
     print("Loading GraphCodeBERT base...")
     tokenizer = RobertaTokenizer.from_pretrained("microsoft/graphcodebert-base")
     model = GraphCodeBERTWithEdgePrediction("microsoft/graphcodebert-base").to(device)
-    print("✓ Loaded GraphCodeBERT with dropout regularization")
+    print("Loaded GraphCodeBERT with dropout regularization")
 
-    # Resolve data file path relative to project root
     data_path = project_root / args.data_file
     print(f"Looking for data file at: {data_path}")
     if not data_path.exists():
@@ -284,7 +254,7 @@ def setup_model_and_data(args, device, project_root):
             f"Project root: {project_root}"
         )
 
-    print(f"✓ Found data file: {data_path}")
+    print(f"Found data file: {data_path}")
     full_dataset = GraphCodeBERTDataset(str(data_path), tokenizer, args.max_length)
 
     val_size = int(args.validation_split * len(full_dataset))
@@ -308,7 +278,6 @@ def setup_model_and_data(args, device, project_root):
 
 
 def setup_optimizer_and_scheduler(model, args, train_dl):
-    """Setup optimizer and learning rate scheduler."""
     optimizer = AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     scheduler = get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=args.warmup_steps,
@@ -318,7 +287,6 @@ def setup_optimizer_and_scheduler(model, args, train_dl):
 
 
 def print_training_config(args, device, use_amp):
-    """Print training configuration."""
     print("\n--- Training Configuration ---")
     for k, v in vars(args).items():
         print(f"  {k}: {v}")
@@ -329,7 +297,6 @@ def print_training_config(args, device, use_amp):
 
 def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: PerformanceTracker,
                 scaler, use_amp=False) -> Tuple[float, float, float]:
-    """Training loop with memory management and loss tracking"""
     model.train()
     total_loss = total_mlm = total_edge = 0
     batch_count = 0
@@ -394,7 +361,7 @@ def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: Perfor
 
         except RuntimeError as e:
             if 'out of memory' in str(e).lower():
-                print(f"\n⚠️ OUT OF MEMORY ERROR!")
+                print(f"\nOUT OF MEMORY ERROR!")
                 print(f"   Batch size: {batch['input_ids'].shape[0]}")
                 print(f"   Sequence length: {batch['input_ids'].shape[1]}")
                 print(f"   Estimated batch memory: ~{batch['input_ids'].shape[0] * batch['input_ids'].shape[1]**2 / 1e6:.0f}MB for attention alone")
@@ -414,7 +381,6 @@ def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: Perfor
 
 
 def validate(model, dataloader, device, tracker: PerformanceTracker, use_amp=False) -> Tuple[float, float, float]:
-    """Validation loop with loss tracking"""
     model.eval()
     total_loss = total_mlm = total_edge = 0
     batch_count = 0
@@ -468,7 +434,6 @@ def validate(model, dataloader, device, tracker: PerformanceTracker, use_amp=Fal
 
 def print_epoch_results(epoch, args, train_loss, train_mlm, train_edge, val_loss, val_mlm, val_edge,
                        current_lr, tracker):
-    """Print epoch results."""
     print(f"\n{'─' * 70}")
     print(f"Epoch {epoch + 1} Results:")
     print(f"  Train - Total: {train_loss:.6f}, MLM: {train_mlm:.6f}, Edge: {train_edge:.6f}")
@@ -480,7 +445,6 @@ def print_epoch_results(epoch, args, train_loss, train_mlm, train_edge, val_loss
 
 
 def clear_cache(device):
-    """Clear GPU/MPS cache."""
     if device.type == 'cuda':
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
@@ -489,7 +453,6 @@ def clear_cache(device):
 
 
 def training_loop(model, train_dl, val_dl, optimizer, scheduler, device, args, tracker, checkpoint_manager, scaler, use_amp):
-    """Main training loop."""
     for epoch in range(args.epochs):
         print(f"\n{'=' * 70}")
         print(f"Epoch {epoch + 1}/{args.epochs}")
@@ -508,7 +471,6 @@ def training_loop(model, train_dl, val_dl, optimizer, scheduler, device, args, t
         tracker.log_epoch(epoch, 'train', train_loss, train_mlm, train_edge, current_lr)
         tracker.log_epoch(epoch, 'val', val_loss, val_mlm, val_edge)
 
-        # Memory stats
         if device.type == 'cuda':
             peak_mem = torch.cuda.max_memory_allocated() / 1024**3
             print(f"\n  Peak GPU Memory: {peak_mem:.2f} GB")
@@ -516,17 +478,16 @@ def training_loop(model, train_dl, val_dl, optimizer, scheduler, device, args, t
         print_epoch_results(epoch, args, train_loss, train_mlm, train_edge, val_loss, val_mlm, val_edge,
                           current_lr, tracker)
 
-        # Save checkpoint every epoch
         checkpoint_manager.save_checkpoint(model, args.tokenizer, epoch)
 
         if tracker.update_best(val_loss, epoch):
-            print(f"\n✓ New best model! Saving best model...")
+            print(f"\nNew best model! Saving best model...")
             checkpoint_manager.save_best_model(model, args.tokenizer)
         else:
-            print(f"\n⚠️  No improvement. Patience: {tracker.patience_counter}/{args.early_stopping_patience}")
+            print(f"\nNo improvement. Patience: {tracker.patience_counter}/{args.early_stopping_patience}")
 
         if tracker.should_stop_early():
-            print(f"\n⚠️  Early stopping triggered!")
+            print(f"\nEarly stopping triggered!")
             print(f"   No improvement for {args.early_stopping_patience} epochs")
             print(f"   Best loss: {tracker.best_val_loss:.6f} at epoch {tracker.history['best_epoch'] + 1}")
             break
@@ -552,7 +513,6 @@ def main():
     parser.add_argument('--early_stopping_patience', type=int, default=3, help='Early stopping patience')
     parser.add_argument('--use_amp', action='store_true', help='Use mixed precision training')
 
-    # Load config and set as defaults BEFORE parsing
     project_root = load_config_and_set_defaults(parser)
     args = parser.parse_args()
 
@@ -571,7 +531,7 @@ def main():
     checkpoint_manager = ModelCheckpointManager(str(output_path))
 
     model, tokenizer, train_dl, val_dl = setup_model_and_data(args, device, project_root)
-    args.tokenizer = tokenizer  # Store tokenizer in args for checkpoint saving
+    args.tokenizer = tokenizer
 
     optimizer, scheduler = setup_optimizer_and_scheduler(model, args, train_dl)
     scaler = GradScaler() if use_amp else None
@@ -584,9 +544,9 @@ def main():
     print("SAVING PERFORMANCE METRICS...")
     print("="*70)
     tracker.save()
-    print(f"\n✓ All results saved to {output_path}")
-    print(f"✓ Best model saved at: {checkpoint_manager.get_best_model_path()}")
-    print(f"✓ Checkpoints saved at: {checkpoint_manager.checkpoints_dir}")
+    print(f"\nAll results saved to {output_path}")
+    print(f"Best model saved at: {checkpoint_manager.get_best_model_path()}")
+    print(f"Checkpoints saved at: {checkpoint_manager.checkpoints_dir}")
 
 
 if __name__ == "__main__":

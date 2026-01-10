@@ -1,6 +1,4 @@
-"""
-GraphCodeBERT model architecture, dataset, and collator.
-"""
+
 import json
 import os
 import random
@@ -18,7 +16,6 @@ from transformers import RobertaForMaskedLM, RobertaTokenizer
 
 
 def find_project_root(start_path: Path = None) -> Path:
-    """Find project root by looking for config.json."""
     if start_path is None:
         start_path = Path(__file__).parent.absolute()
 
@@ -38,7 +35,6 @@ def find_project_root(start_path: Path = None) -> Path:
 
 
 def load_config() -> Dict:
-    """Load config.json from project root."""
     project_root = find_project_root()
     config_path = project_root / 'config.json'
 
@@ -50,13 +46,10 @@ def load_config() -> Dict:
 
 
 class GraphCodeBERTDataset(Dataset):
-    """Custom Dataset for GraphCodeBERT with DFG processing"""
-
     def __init__(self, jsonl_file: str, tokenizer, max_length: Optional[int] = None):
         self.tokenizer = tokenizer
         self.max_length = max_length
 
-        # Load config if max_length not provided
         if self.max_length is None:
             try:
                 config = load_config()
@@ -97,46 +90,34 @@ class GraphCodeBERTDataset(Dataset):
                     dfg_nodes.append((var, def_pos))
                 adj[node_to_idx[use_pos]].append(node_to_idx[def_pos])
 
-        # Calculate max code length considering DFG nodes
         dfg_token_count = len(dfg_nodes)
         max_code_len = self.max_length - dfg_token_count - 3
 
         if len(code_tokens) > max_code_len:
             code_tokens = code_tokens[:max_code_len]
 
-        # Build token sequence
         tokens = [self.tokenizer.cls_token] + code_tokens + [self.tokenizer.sep_token]
         dfg_start_pos = len(tokens)
         tokens.extend([self.tokenizer.unk_token] * dfg_token_count)
         tokens.append(self.tokenizer.sep_token)
 
-        # Convert tokens to IDs
         input_ids = self.tokenizer.convert_tokens_to_ids(tokens)
         position_idx = list(range(len(code_tokens) + 2)) + [0] * dfg_token_count + [len(code_tokens) + 2]
 
-        # Pad to max_length
         padding_len = self.max_length - len(input_ids)
-        if padding_len < 0:
-            raise ValueError(
-                f"Sequence too long! {len(tokens)} tokens > {self.max_length} max_length. "
-                f"Code tokens: {len(code_tokens)}, DFG nodes: {dfg_token_count}"
-            )
+
 
         input_ids.extend([self.tokenizer.pad_token_id] * padding_len)
         position_idx.extend([0] * padding_len)
 
-        # Build attention mask
         attn_mask = np.zeros((self.max_length, self.max_length), dtype=np.bool_)
         code_len = len(code_tokens) + 2
 
-        # Code section attends to code section
         attn_mask[:code_len, :code_len] = True
 
-        # Each token attends to itself
         for i in range(len(tokens)):
             attn_mask[i, i] = True
 
-        # DFG nodes attend to their corresponding code positions
         for i, (_, code_pos) in enumerate(dfg_nodes):
             if code_pos + 1 < code_len:
                 dfg_abs = dfg_start_pos + i
@@ -144,14 +125,12 @@ class GraphCodeBERTDataset(Dataset):
                 attn_mask[dfg_abs, code_abs] = True
                 attn_mask[code_abs, dfg_abs] = True
 
-        # DFG edges: nodes attend to their dependencies
         for i, adjs in adj.items():
             for j in adjs:
                 u, v = dfg_start_pos + i, dfg_start_pos + j
                 attn_mask[u, v] = True
                 attn_mask[v, u] = True
 
-        # Validate shapes
         assert len(input_ids) == self.max_length, \
             f"Input IDs length {len(input_ids)} != max_length {self.max_length}"
         assert len(position_idx) == self.max_length, \
@@ -171,12 +150,9 @@ class GraphCodeBERTDataset(Dataset):
 
 
 class GraphCodeBERTWithEdgePrediction(nn.Module):
-    """GraphCodeBERT with MLM and Edge Prediction heads"""
-
     def __init__(self, base_model_name: Optional[str] = None):
         super().__init__()
 
-        # Load config if base_model_name not provided
         if base_model_name is None:
             try:
                 config = load_config()
@@ -187,7 +163,6 @@ class GraphCodeBERTWithEdgePrediction(nn.Module):
         self.roberta_mlm = RobertaForMaskedLM.from_pretrained(base_model_name)
         hidden_size = self.roberta_mlm.config.hidden_size
 
-        # Load dropout values from config
         try:
             config = load_config()
             hidden_dropout = config.get('model', {}).get('hidden_dropout_prob', 0.2)
@@ -196,7 +171,6 @@ class GraphCodeBERTWithEdgePrediction(nn.Module):
             hidden_dropout = 0.2
             attention_dropout = 0.2
 
-        # Add dropout for regularization
         self.roberta_mlm.config.hidden_dropout_prob = hidden_dropout
         self.roberta_mlm.config.attention_probs_dropout_prob = attention_dropout
 
@@ -243,13 +217,11 @@ class GraphCodeBERTWithEdgePrediction(nn.Module):
 
 @dataclass
 class MLMWithEdgePredictionCollator:
-    """Data collator for MLM and Edge Prediction"""
     tokenizer: RobertaTokenizer
     mlm_probability: Optional[float] = None
     edge_sample_ratio: Optional[float] = None
 
     def __post_init__(self):
-        """Load config values if not provided."""
         if self.mlm_probability is None or self.edge_sample_ratio is None:
             try:
                 config = load_config()
@@ -274,7 +246,6 @@ class MLMWithEdgePredictionCollator:
         attn_mask = torch.stack([ex['attention_mask'] for ex in examples])
         pos_idx = torch.stack([ex['position_idx'] for ex in examples])
 
-        # Verify batch dimensions
         assert input_ids.shape == (batch_size, max_seq_length), \
             f"Input IDs batch shape error: {input_ids.shape} vs expected {(batch_size, max_seq_length)}"
         assert attn_mask.shape == (batch_size, max_seq_length, max_seq_length), \
@@ -282,7 +253,6 @@ class MLMWithEdgePredictionCollator:
         assert pos_idx.shape == (batch_size, max_seq_length), \
             f"Position indices batch shape error: {pos_idx.shape} vs expected {(batch_size, max_seq_length)}"
 
-        # MLM masking
         labels, masked_ids = input_ids.clone(), input_ids.clone()
         for i in range(batch_size):
             code_indices = (pos_idx[i] > 1).nonzero(as_tuple=True)[0]
@@ -302,7 +272,6 @@ class MLMWithEdgePredictionCollator:
             labels[i, ~mask_ind] = -100
         labels[masked_ids == self.tokenizer.pad_token_id] = -100
 
-        # Edge prediction
         edge_pairs = []
         max_pairs = 20
         for i in range(batch_size):
