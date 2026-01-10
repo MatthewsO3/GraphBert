@@ -1,0 +1,37 @@
+{
+  "model": {
+    "base_model": "microsoft/graphcodebert-base",
+    "hidden_dropout_prob": 0.2,
+    "attention_probs_dropout_prob": 0.2,
+    "edge_sample_ratio": 0.5
+  },
+   "data": {
+    "output_file": "data/cpp_functions.jsonl",
+    "max_samples": 100,
+    "code_tokens_max": 512,
+    "dfg_max_nodes": 64,
+    "num_workers": 4
+  },
+  "train": {
+    "data_file": "data/cpp_functions.jsonl",
+    "output_dir": "models",
+    "batch_size": 1,
+    "epochs": 1,
+    "learning_rate": 2e-5,
+    "max_length": 126,
+    "warmup_steps": 5,
+    "mlm_probability": 0.15,
+    "validation_split": 0.15,
+    "weight_decay": 0.01,
+    "early_stopping_patience": 3
+  },
+  "evaluate": {
+  "mask_ratio": 0.15,
+  "top_k": 10,
+  "use_database_snippets": true,
+  "training_data_size": 100,
+  "num_test_snippets": 100,
+  "max_tokens_per_snippet": 256,
+  "model_checkpoint": "best_model"
+}
+}
