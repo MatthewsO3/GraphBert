@@ -1,3 +1,4 @@
+
 import argparse
 import csv
 import json
@@ -216,7 +217,7 @@ def find_project_root(start_path: Path = None) -> Path:
             return current
 
         parent = current.parent
-        if parent == current:  # Reached filesystem root
+        if parent == current:
             raise FileNotFoundError(
                 "Could not find project root. "
                 "Make sure config.json exists in the project root directory."
@@ -240,10 +241,21 @@ def load_config_and_set_defaults(parser):
 
 
 def setup_model_and_data(args, device, project_root):
-    print("Loading GraphCodeBERT base...")
-    tokenizer = RobertaTokenizer.from_pretrained("microsoft/graphcodebert-base")
-    model = GraphCodeBERTWithEdgePrediction("microsoft/graphcodebert-base").to(device)
-    print("Loaded GraphCodeBERT with dropout regularization")
+    print("Loading GraphCodeBERT...")
+
+    # Check if loading from checkpoint (e.g., Erlang trained model)
+    checkpoint_path = getattr(args, 'checkpoint_path', None)
+
+    if checkpoint_path:
+        print(f"Loading model from checkpoint: {checkpoint_path}")
+        model = GraphCodeBERTWithEdgePrediction.from_pretrained(checkpoint_path).to(device)
+        tokenizer = RobertaTokenizer.from_pretrained(checkpoint_path)
+    else:
+        print("Loading base model...")
+        tokenizer = RobertaTokenizer.from_pretrained("microsoft/graphcodebert-base")
+        model = GraphCodeBERTWithEdgePrediction("microsoft/graphcodebert-base").to(device)
+
+    print("Model loaded successfully")
 
     data_path = project_root / args.data_file
     print(f"Looking for data file at: {data_path}")
@@ -306,34 +318,49 @@ def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: Perfor
         optimizer.zero_grad()
 
         try:
+            # Move batch to device
+            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
+                     for k, v in batch.items()}
+
             if use_amp:
                 with torch.amp.autocast(device_type='cuda' if device.type == 'cuda' else 'cpu'):
-                    loss, mlm_loss, edge_loss = model(
-                        input_ids=batch['input_ids'].to(device),
-                        attention_mask=batch['attention_mask'].to(device),
-                        position_ids=batch['position_ids'].to(device),
-                        labels=batch['labels'].to(device),
-                        edge_batch_idx=batch['edge_batch_idx'].to(device),
-                        edge_node1_pos=batch['edge_node1_pos'].to(device),
-                        edge_node2_pos=batch['edge_node2_pos'].to(device),
-                        edge_labels=batch['edge_labels'].to(device)
+                    # ✅ NEW: Model returns dict now
+                    outputs = model(
+                        input_ids=batch['input_ids'],
+                        attention_mask=batch['attention_mask'],
+                        position_ids=batch['position_ids'],
+                        labels=batch['labels'],
+                        edge_batch_idx=batch['edge_batch_idx'],
+                        edge_node1_pos=batch['edge_node1_pos'],
+                        edge_node2_pos=batch['edge_node2_pos'],
+                        edge_labels=batch['edge_labels']
                     )
+
+                    loss = outputs['loss']
+                    mlm_loss = outputs['mlm_loss']
+                    edge_loss = outputs['edge_loss']
 
                 scaler.scale(loss).backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 scaler.step(optimizer)
                 scaler.update()
             else:
-                loss, mlm_loss, edge_loss = model(
-                    input_ids=batch['input_ids'].to(device),
-                    attention_mask=batch['attention_mask'].to(device),
-                    position_ids=batch['position_ids'].to(device),
-                    labels=batch['labels'].to(device),
-                    edge_batch_idx=batch['edge_batch_idx'].to(device),
-                    edge_node1_pos=batch['edge_node1_pos'].to(device),
-                    edge_node2_pos=batch['edge_node2_pos'].to(device),
-                    edge_labels=batch['edge_labels'].to(device)
+                # ✅ NEW: Model returns dict now
+                outputs = model(
+                    input_ids=batch['input_ids'],
+                    attention_mask=batch['attention_mask'],
+                    position_ids=batch['position_ids'],
+                    labels=batch['labels'],
+                    edge_batch_idx=batch['edge_batch_idx'],
+                    edge_node1_pos=batch['edge_node1_pos'],
+                    edge_node2_pos=batch['edge_node2_pos'],
+                    edge_labels=batch['edge_labels']
                 )
+
+                loss = outputs['loss']
+                mlm_loss = outputs['mlm_loss']
+                edge_loss = outputs['edge_loss']
+
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
@@ -346,8 +373,8 @@ def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: Perfor
             batch_count += 1
 
             tracker.log_batch('train', loss.item(),
-                             mlm_loss.item() if mlm_loss else None,
-                             edge_loss.item() if edge_loss else None)
+                              mlm_loss.item() if mlm_loss else None,
+                              edge_loss.item() if edge_loss else None)
 
             current_lr = optimizer.param_groups[0]['lr']
             avg_loss = total_loss / batch_count
@@ -364,7 +391,6 @@ def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: Perfor
                 print(f"\nOUT OF MEMORY ERROR!")
                 print(f"   Batch size: {batch['input_ids'].shape[0]}")
                 print(f"   Sequence length: {batch['input_ids'].shape[1]}")
-                print(f"   Estimated batch memory: ~{batch['input_ids'].shape[0] * batch['input_ids'].shape[1]**2 / 1e6:.0f}MB for attention alone")
                 print(f"   Try reducing batch_size or max_length")
                 raise
             else:
@@ -375,7 +401,6 @@ def train_epoch(model, dataloader, optimizer, scheduler, device, tracker: Perfor
                 torch.cuda.empty_cache()
             elif device.type == 'mps':
                 torch.mps.empty_cache()
-            del batch
 
     return (total_loss / batch_count, total_mlm / batch_count, total_edge / batch_count)
 
@@ -388,29 +413,38 @@ def validate(model, dataloader, device, tracker: PerformanceTracker, use_amp=Fal
 
     with torch.no_grad():
         for batch in progress_bar:
+            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
+                     for k, v in batch.items()}
+
             if use_amp:
                 with torch.amp.autocast(device_type='cuda' if device.type == 'cuda' else 'cpu'):
-                    loss, mlm_loss, edge_loss = model(
-                        input_ids=batch['input_ids'].to(device),
-                        attention_mask=batch['attention_mask'].to(device),
-                        position_ids=batch['position_ids'].to(device),
-                        labels=batch['labels'].to(device),
-                        edge_batch_idx=batch['edge_batch_idx'].to(device),
-                        edge_node1_pos=batch['edge_node1_pos'].to(device),
-                        edge_node2_pos=batch['edge_node2_pos'].to(device),
-                        edge_labels=batch['edge_labels'].to(device)
+                    # ✅ NEW: Model returns dict now
+                    outputs = model(
+                        input_ids=batch['input_ids'],
+                        attention_mask=batch['attention_mask'],
+                        position_ids=batch['position_ids'],
+                        labels=batch['labels'],
+                        edge_batch_idx=batch['edge_batch_idx'],
+                        edge_node1_pos=batch['edge_node1_pos'],
+                        edge_node2_pos=batch['edge_node2_pos'],
+                        edge_labels=batch['edge_labels']
                     )
             else:
-                loss, mlm_loss, edge_loss = model(
-                    input_ids=batch['input_ids'].to(device),
-                    attention_mask=batch['attention_mask'].to(device),
-                    position_ids=batch['position_ids'].to(device),
-                    labels=batch['labels'].to(device),
-                    edge_batch_idx=batch['edge_batch_idx'].to(device),
-                    edge_node1_pos=batch['edge_node1_pos'].to(device),
-                    edge_node2_pos=batch['edge_node2_pos'].to(device),
-                    edge_labels=batch['edge_labels'].to(device)
+                # ✅ NEW: Model returns dict now
+                outputs = model(
+                    input_ids=batch['input_ids'],
+                    attention_mask=batch['attention_mask'],
+                    position_ids=batch['position_ids'],
+                    labels=batch['labels'],
+                    edge_batch_idx=batch['edge_batch_idx'],
+                    edge_node1_pos=batch['edge_node1_pos'],
+                    edge_node2_pos=batch['edge_node2_pos'],
+                    edge_labels=batch['edge_labels']
                 )
+
+            loss = outputs['loss']
+            mlm_loss = outputs['mlm_loss']
+            edge_loss = outputs['edge_loss']
 
             total_loss += loss.item()
             if mlm_loss: total_mlm += mlm_loss.item()
@@ -418,8 +452,8 @@ def validate(model, dataloader, device, tracker: PerformanceTracker, use_amp=Fal
             batch_count += 1
 
             tracker.log_batch('val', loss.item(),
-                             mlm_loss.item() if mlm_loss else None,
-                             edge_loss.item() if edge_loss else None)
+                              mlm_loss.item() if mlm_loss else None,
+                              edge_loss.item() if edge_loss else None)
 
             avg_loss = total_loss / batch_count
             progress_bar.set_postfix({
@@ -433,13 +467,14 @@ def validate(model, dataloader, device, tracker: PerformanceTracker, use_amp=Fal
 
 
 def print_epoch_results(epoch, args, train_loss, train_mlm, train_edge, val_loss, val_mlm, val_edge,
-                       current_lr, tracker):
+                        current_lr, tracker):
     print(f"\n{'─' * 70}")
     print(f"Epoch {epoch + 1} Results:")
     print(f"  Train - Total: {train_loss:.6f}, MLM: {train_mlm:.6f}, Edge: {train_edge:.6f}")
     print(f"  Val   - Total: {val_loss:.6f}, MLM: {val_mlm:.6f}, Edge: {val_edge:.6f}")
     print(f"  Learning Rate: {current_lr:.6e}")
-    print(f"  Best Val Loss: {tracker.best_val_loss:.6f} (Epoch {tracker.history['best_epoch'] + 1 if tracker.history['best_epoch'] is not None else 'N/A'})")
+    print(
+        f"  Best Val Loss: {tracker.best_val_loss:.6f} (Epoch {tracker.history['best_epoch'] + 1 if tracker.history['best_epoch'] is not None else 'N/A'})")
     print(f"  Patience:      {tracker.patience_counter}/{args.early_stopping_patience}")
     print(f"{'─' * 70}")
 
@@ -452,7 +487,8 @@ def clear_cache(device):
         torch.mps.empty_cache()
 
 
-def training_loop(model, train_dl, val_dl, optimizer, scheduler, device, args, tracker, checkpoint_manager, scaler, use_amp):
+def training_loop(model, train_dl, val_dl, optimizer, scheduler, device, args, tracker, checkpoint_manager, scaler,
+                  use_amp):
     for epoch in range(args.epochs):
         print(f"\n{'=' * 70}")
         print(f"Epoch {epoch + 1}/{args.epochs}")
@@ -460,7 +496,8 @@ def training_loop(model, train_dl, val_dl, optimizer, scheduler, device, args, t
 
         clear_cache(device)
 
-        train_loss, train_mlm, train_edge = train_epoch(model, train_dl, optimizer, scheduler, device, tracker, scaler, use_amp)
+        train_loss, train_mlm, train_edge = train_epoch(model, train_dl, optimizer, scheduler, device, tracker, scaler,
+                                                        use_amp)
 
         clear_cache(device)
 
@@ -472,11 +509,11 @@ def training_loop(model, train_dl, val_dl, optimizer, scheduler, device, args, t
         tracker.log_epoch(epoch, 'val', val_loss, val_mlm, val_edge)
 
         if device.type == 'cuda':
-            peak_mem = torch.cuda.max_memory_allocated() / 1024**3
+            peak_mem = torch.cuda.max_memory_allocated() / 1024 ** 3
             print(f"\n  Peak GPU Memory: {peak_mem:.2f} GB")
 
         print_epoch_results(epoch, args, train_loss, train_mlm, train_edge, val_loss, val_mlm, val_edge,
-                          current_lr, tracker)
+                            current_lr, tracker)
 
         checkpoint_manager.save_checkpoint(model, args.tokenizer, epoch)
 
@@ -500,8 +537,12 @@ def training_loop(model, train_dl, val_dl, optimizer, scheduler, device, args, t
 
 def main():
     parser = argparse.ArgumentParser(description='Train GraphCodeBERT with Edge Prediction')
-    parser.add_argument('--data_file', type=str, default=None, help='Path to training data file (relative to project root)')
-    parser.add_argument('--output_dir', type=str, default=None, help='Output directory for results (relative to project root)')
+    parser.add_argument('--data_file', type=str, default=None,
+                        help='Path to training data file (relative to project root)')
+    parser.add_argument('--output_dir', type=str, default=None,
+                        help='Output directory for results (relative to project root)')
+    parser.add_argument('--checkpoint_path', type=str, default=None,
+                        help='Path to checkpoint to load (e.g., Erlang trained model)')
     parser.add_argument('--batch_size', type=int, default=None, help='Batch size')
     parser.add_argument('--epochs', type=int, default=None, help='Number of epochs')
     parser.add_argument('--learning_rate', type=float, default=None, help='Learning rate')
@@ -538,11 +579,12 @@ def main():
 
     print_training_config(args, device, use_amp)
 
-    training_loop(model, train_dl, val_dl, optimizer, scheduler, device, args, tracker, checkpoint_manager, scaler, use_amp)
+    training_loop(model, train_dl, val_dl, optimizer, scheduler, device, args, tracker, checkpoint_manager, scaler,
+                  use_amp)
 
-    print("="*70)
+    print("=" * 70)
     print("SAVING PERFORMANCE METRICS...")
-    print("="*70)
+    print("=" * 70)
     tracker.save()
     print(f"\nAll results saved to {output_path}")
     print(f"Best model saved at: {checkpoint_manager.get_best_model_path()}")

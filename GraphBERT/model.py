@@ -1,4 +1,5 @@
 
+
 import json
 import os
 import random
@@ -26,7 +27,7 @@ def find_project_root(start_path: Path = None) -> Path:
             return current
 
         parent = current.parent
-        if parent == current:  # Reached filesystem root
+        if parent == current:
             raise FileNotFoundError(
                 "Could not find project root. "
                 "Make sure config.json exists in the project root directory."
@@ -106,7 +107,6 @@ class GraphCodeBERTDataset(Dataset):
 
         padding_len = self.max_length - len(input_ids)
 
-
         input_ids.extend([self.tokenizer.pad_token_id] * padding_len)
         position_idx.extend([0] * padding_len)
 
@@ -131,12 +131,9 @@ class GraphCodeBERTDataset(Dataset):
                 attn_mask[u, v] = True
                 attn_mask[v, u] = True
 
-        assert len(input_ids) == self.max_length, \
-            f"Input IDs length {len(input_ids)} != max_length {self.max_length}"
-        assert len(position_idx) == self.max_length, \
-            f"Position indices length {len(position_idx)} != max_length {self.max_length}"
-        assert attn_mask.shape == (self.max_length, self.max_length), \
-            f"Attention mask shape {attn_mask.shape} != ({self.max_length}, {self.max_length})"
+        assert len(input_ids) == self.max_length
+        assert len(position_idx) == self.max_length
+        assert attn_mask.shape == (self.max_length, self.max_length)
 
         return {
             'input_ids': torch.tensor(input_ids, dtype=torch.long),
@@ -150,6 +147,24 @@ class GraphCodeBERTDataset(Dataset):
 
 
 class GraphCodeBERTWithEdgePrediction(nn.Module):
+    """
+    Unified GraphCodeBERT model accepting both Erlang and C++ input formats.
+
+    ERLANG format inputs:
+    - position_idx: [batch, seq_len]
+    - edge_candidates: [batch, max_edges, 2]
+    - edge_labels: [batch, max_edges]
+    - alignment_candidates, alignment_labels (optional)
+    - dfg_start_idx
+
+    C++ format inputs:
+    - position_ids: [batch, seq_len]
+    - edge_batch_idx, edge_node1_pos, edge_node2_pos, edge_labels
+
+    Returns:
+    - dict with keys: loss, mlm_loss, edge_loss
+    """
+
     def __init__(self, base_model_name: Optional[str] = None):
         super().__init__()
 
@@ -174,6 +189,7 @@ class GraphCodeBERTWithEdgePrediction(nn.Module):
         self.roberta_mlm.config.hidden_dropout_prob = hidden_dropout
         self.roberta_mlm.config.attention_probs_dropout_prob = attention_dropout
 
+        # Edge classifier for predicting DFG edges
         self.edge_classifier = nn.Sequential(
             nn.Linear(hidden_size * 2, hidden_size),
             nn.Tanh(),
@@ -181,38 +197,147 @@ class GraphCodeBERTWithEdgePrediction(nn.Module):
             nn.Linear(hidden_size, 1)
         )
 
-    def forward(self, input_ids, attention_mask, position_ids, labels=None,
-                edge_batch_idx=None, edge_node1_pos=None, edge_node2_pos=None, edge_labels=None):
+    def forward(
+            self,
+            input_ids,
+            attention_mask,
+            labels=None,
+
+            # C++ format
+            position_ids=None,
+            edge_batch_idx=None,
+            edge_node1_pos=None,
+            edge_node2_pos=None,
+
+            # Erlang format
+            position_idx=None,
+            edge_candidates=None,
+            alignment_candidates=None,
+            alignment_labels=None,
+            dfg_start_idx=None,
+
+            edge_labels=None,
+            **kwargs
+    ):
+        """
+        Flexible forward pass accepting both Erlang and C++ input formats.
+
+        Automatically detects format and converts as needed.
+        """
+
+        # Step 1: Normalize position input
+        if position_ids is None and position_idx is not None:
+            position_ids = position_idx
+        elif position_ids is None:
+            # Generate default positions
+            batch_size, seq_len = input_ids.shape
+            position_ids = torch.arange(seq_len, device=input_ids.device).unsqueeze(0).expand(batch_size, -1)
+
+        # Step 2: Convert edge format if needed
+        # If Erlang format is provided (edge_candidates), convert to C++ format
+        if edge_candidates is not None and edge_batch_idx is None:
+            edge_batch_idx, edge_node1_pos, edge_node2_pos = \
+                self._convert_erlang_edges_to_cpp(edge_candidates)
+
+        # Step 3: MLM forward pass
         mlm_outputs = self.roberta_mlm(
-            input_ids=input_ids, attention_mask=attention_mask,
-            position_ids=position_ids, labels=labels, output_hidden_states=True
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            labels=labels,
+            output_hidden_states=True
         )
         mlm_loss = mlm_outputs.loss if labels is not None else None
 
+        # Step 4: Edge prediction
         edge_loss = None
         if (edge_batch_idx is not None and len(edge_batch_idx) > 0 and
                 edge_node1_pos is not None and edge_node2_pos is not None and edge_labels is not None):
             hidden_states = mlm_outputs.hidden_states[-1]
-            batch_size, seq_len, hidden_size = hidden_states.shape
 
             node1_repr = hidden_states[edge_batch_idx, edge_node1_pos]
             node2_repr = hidden_states[edge_batch_idx, edge_node2_pos]
             edge_repr = torch.cat([node1_repr, node2_repr], dim=-1)
             edge_logits = self.edge_classifier(edge_repr).squeeze(-1)
-            edge_loss = nn.functional.binary_cross_entropy_with_logits(edge_logits, edge_labels)
 
+            # Ensure edge_labels is float for BCE loss
+            edge_labels_float = edge_labels.float() if edge_labels.dtype != torch.float32 else edge_labels
+            edge_loss = nn.functional.binary_cross_entropy_with_logits(edge_logits, edge_labels_float)
+
+        # Step 5: Combine losses
         if mlm_loss is not None and edge_loss is not None:
             total_loss = mlm_loss + edge_loss
         elif mlm_loss is not None:
             total_loss = mlm_loss
-        else:
+        elif edge_loss is not None:
             total_loss = edge_loss
+        else:
+            total_loss = torch.tensor(0.0, device=input_ids.device, requires_grad=True)
 
-        return total_loss, mlm_loss, edge_loss
+        # Return as dict for consistency
+        return {
+            'loss': total_loss,
+            'mlm_loss': mlm_loss,
+            'edge_loss': edge_loss,
+        }
+
+    def _convert_erlang_edges_to_cpp(self, edge_candidates: torch.Tensor) -> tuple:
+        """
+        Convert Erlang edge format to C++ edge format.
+
+        Erlang: [batch_size, max_edges, 2] → each [..., :2] contains [node1_pos, node2_pos]
+        C++: Returns (edge_batch_idx, edge_node1_pos, edge_node2_pos)
+        """
+        batch_size = edge_candidates.shape[0]
+
+        batch_indices = []
+        node1_positions = []
+        node2_positions = []
+
+        for batch_idx in range(batch_size):
+            edges = edge_candidates[batch_idx]  # [max_edges, 2]
+
+            # Filter out padding (assume padding is [0, 0])
+            valid_edges = edges[(edges[:, 0] != 0) | (edges[:, 1] != 0)]
+
+            if len(valid_edges) > 0:
+                batch_indices.extend([batch_idx] * len(valid_edges))
+                node1_positions.extend(valid_edges[:, 0].tolist())
+                node2_positions.extend(valid_edges[:, 1].tolist())
+
+        device = edge_candidates.device
+
+        if len(batch_indices) > 0:
+            return (
+                torch.tensor(batch_indices, dtype=torch.long, device=device),
+                torch.tensor(node1_positions, dtype=torch.long, device=device),
+                torch.tensor(node2_positions, dtype=torch.long, device=device),
+            )
+        else:
+            return (
+                torch.tensor([], dtype=torch.long, device=device),
+                torch.tensor([], dtype=torch.long, device=device),
+                torch.tensor([], dtype=torch.long, device=device),
+            )
 
     def save_pretrained(self, save_directory):
+        """
+        Save only the base model (roberta_mlm), not the edge_classifier.
+        This makes it compatible with HuggingFace's from_pretrained() and
+        allows Erlang script to load it.
+        """
         self.roberta_mlm.save_pretrained(save_directory)
-        torch.save(self.edge_classifier.state_dict(), f"{save_directory}/edge_classifier.pt")
+        print(f"✓ Base model saved to {save_directory}")
+        print(f"  Note: edge_classifier is NOT saved (it gets re-initialized on load)")
+
+    @classmethod
+    def from_pretrained(cls, model_name_or_path, **kwargs):
+        """
+        Load model from pretrained checkpoint.
+        Creates instance with base model, edge_classifier gets fresh initialization.
+        """
+        instance = cls(model_name_or_path)
+        return instance
 
 
 @dataclass
@@ -246,12 +371,9 @@ class MLMWithEdgePredictionCollator:
         attn_mask = torch.stack([ex['attention_mask'] for ex in examples])
         pos_idx = torch.stack([ex['position_idx'] for ex in examples])
 
-        assert input_ids.shape == (batch_size, max_seq_length), \
-            f"Input IDs batch shape error: {input_ids.shape} vs expected {(batch_size, max_seq_length)}"
-        assert attn_mask.shape == (batch_size, max_seq_length, max_seq_length), \
-            f"Attention mask batch shape error: {attn_mask.shape} vs expected {(batch_size, max_seq_length, max_seq_length)}"
-        assert pos_idx.shape == (batch_size, max_seq_length), \
-            f"Position indices batch shape error: {pos_idx.shape} vs expected {(batch_size, max_seq_length)}"
+        assert input_ids.shape == (batch_size, max_seq_length)
+        assert attn_mask.shape == (batch_size, max_seq_length, max_seq_length)
+        assert pos_idx.shape == (batch_size, max_seq_length)
 
         labels, masked_ids = input_ids.clone(), input_ids.clone()
         for i in range(batch_size):
@@ -315,7 +437,7 @@ class MLMWithEdgePredictionCollator:
         return {
             'input_ids': masked_ids,
             'attention_mask': attn_mask,
-            'position_ids': pos_idx,
+            'position_ids': pos_idx,  # C++ script expects position_ids
             'labels': labels,
             'edge_batch_idx': edge_batch_idx,
             'edge_node1_pos': edge_node1_pos,
