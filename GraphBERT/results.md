@@ -1,93 +1,91 @@
-**STEP 1: Train base model on Erlang**
-Batch size: 32
-Loaded 40 functions from output/graphcodebert_data/train.jsonl
-Loaded 5 functions from output/graphcodebert_data/valid.jsonl
-Epochs: 3
+## STEP 1: Fine-Tuning on Erlang
 
-Epoch 1/3
-INFO -   Average losses - Total: 1.9575, MLM: 2.1919, Edge: 2.1693, Align: 1.5113
-INFO -   Validation losses - Total: 1.9322, MLM: 2.0639, Edge: 2.6138, Align: 1.1190
+**Configuration**
+- Batch size: `32`
+- Training samples: `40` functions
+- Validation samples: `5` functions
+- Epochs: `3`
 
-Epoch 2/3
-INFO -   Average losses - Total: 1.7960, MLM: 1.6933, Edge: 2.4182, Align: 1.2765
-INFO -   Validation losses - Total: 1.5909, MLM: 1.1496, Edge: 2.5967, Align: 1.0264
+### Training & Validation Losses
 
-Epoch 3/3
-INFO -   Average losses - Total: 1.8460, MLM: 1.9644, Edge: 2.0218, Align: 1.5520
-INFO -   Validation losses - Total: 1.7077, MLM: 1.5471, Edge: 2.4848, Align: 1.0911
+| Epoch | Train Total | Train MLM | Train Edge | Train Align | Val Total | Val MLM | Val Edge | Val Align |
+|------:|------------:|----------:|-----------:|------------:|----------:|--------:|---------:|----------:|
+| 1 | 1.9575 | 2.1919 | 2.1693 | 1.5113 | 1.9322 | 2.0639 | 2.6138 | 1.1190 |
+| 2 | **1.7960** | **1.6933** | 2.4182 | **1.2765** | **1.5909** | **1.1496** | 2.5967 | **1.0264** |
+| 3 | 1.8460 | 1.9644 | **2.0218** | 1.5520 | 1.7077 | 1.5471 | **2.4848** | 1.0911 |
 
+---
 
-***STEP 2 : Evaluate after base_model -> Erlang***
-mlm_erlang:
-  mlm_accuracy: 0.6797
-  mlm_loss: 2.0032
-  perplexity: 7.4130
-  top5_accuracy: 0.8105
-  top10_accuracy: 0.8431
-  total_examples: 5.0000
-  total_masked_tokens: 153.0000
-{'mlm_erlang': {'mlm_accuracy': 0.6797385620915033, 'mlm_loss': 2.003233953239092, 'perplexity': 7.412990641571614, 'top5_accuracy': 0.8104575163398693, 'top10_accuracy': 0.8431372549019608, 'total_examples': 5, 'total_masked_tokens': 153}}
+## STEP 2: Evaluation - Erlang Model
 
-======================================================================
-                Evaluation Results - C++ (Not trained yet)                      
-======================================================================
-Snippets evaluated:     100
-Total masked tokens:    2500
-----------------------------------------------------------------------
-Top-1 Accuracy:         61.92% (1548/2500)
-Top-5 Accuracy:         76.56% (1914/2500)
-Perplexity:             223.0452
-======================================================================
+### Erlang MLM Metrics
 
+| Metric | Value |
+|------|------:|
+| MLM Accuracy | **67.97%** |
+| MLM Loss | 2.0032 |
+| Perplexity | 7.4130 |
+| Top-5 Accuracy | 81.05% |
+| Top-10 Accuracy | 84.31% |
+| Total Masked Tokens | 153 |
 
-***STEP 3: Train model from Erlang on C++ ***
-Loaded 500 samples
-batch_size: 32
-epochs: 3
+### Evaluation on C++ (Before C++ Training)
 
-Epoch 1 Results:
-  Train - Total: 4.213040, MLM: 3.522328, Edge: 0.690712
-  Val   - Total: 3.860605, MLM: 3.258986, Edge: 0.601619
-  Learning Rate: 1.513514e-05
-  Best Val Loss: inf (Epoch N/A)
-  Patience:      0/3
+| Metric | Value |
+|------|------:|
+| Snippets Evaluated | 100 |
+| Masked Tokens | 2500 |
+| Top-1 Accuracy | **61.92%** |
+| Top-5 Accuracy | 76.56% |
+| Perplexity | **223.05** |
 
-Epoch 2 Results:
-  Train - Total: 3.602106, MLM: 3.035109, Edge: 0.566997
-  Val   - Total: 3.268689, MLM: 2.742136, Edge: 0.526554
-  Learning Rate: 7.567568e-06
-  Best Val Loss: 3.860605 (Epoch 1)
-  Patience:      0/3
+---
 
-Epoch 3 Results:
-  Train - Total: 3.241357, MLM: 2.729994, Edge: 0.511363
-  Val   - Total: 2.959209, MLM: 2.455985, Edge: 0.503224
-  Learning Rate: 0.000000e+00
-  Best Val Loss: 3.268689 (Epoch 2)
-  Patience:      0/3
+## STEP 3: Continued Fine-Tuning on C++
 
-  Evaluating 100 snippets...
+**Configuration**
+- Training samples: `500`
+- Batch size: `32`
+- Epochs: `3`
+- Learning rate decay to zero
+- Early stopping patience: `3`
 
-***STEP 4 : Evaluate after base_model -> Erlang -> C++**
-======================================================================
-                    Evaluation Results - C++                      
-======================================================================
-Snippets evaluated:     100
-Total masked tokens:    2500
-----------------------------------------------------------------------
-Top-1 Accuracy:         62.32% (1558/2500)
-Top-5 Accuracy:         76.60% (1915/2500)
-Perplexity:             233.0946
-======================================================================
+### Training Progress
 
-mlm_erlang:
-  mlm_accuracy: 0.7755
-  mlm_loss: 1.3108
-  perplexity: 3.7090
-  top5_accuracy: 0.8571
-  top10_accuracy: 0.8776
-  total_examples: 5.0000
-  total_masked_tokens: 147.0000
+| Epoch | Train Total | Train MLM | Train Edge | Val Total | Val MLM | Val Edge | LR |
+|------:|------------:|----------:|-----------:|----------:|--------:|---------:|----:|
+| 1 | 4.2130 | 3.5223 | 0.6907 | 3.8606 | 3.2590 | 0.6016 | 1.51e-5 |
+| 2 | 3.6021 | 3.0351 | 0.5670 | 3.2687 | 2.7421 | 0.5266 | 7.57e-6 |
+| 3 | **3.2414** | **2.7300** | **0.5114** | **2.9592** | **2.4560** | **0.5032** | 0.00 |
+
+---
+
+## STEP 4: Final Evaluation - C++ Model
+
+### C++ MLM Metrics
+
+| Metric | Value |
+|------|------:|
+| Snippets Evaluated | 100 |
+| Masked Tokens | 2500 |
+| Top-1 Accuracy | **62.32%** |
+| Top-5 Accuracy | 76.60% |
+| Perplexity | **233.09** |
+
+### Erlang Retention After C++ Fine-Tuning
+
+| Metric | Value |
+|------|------:|
+| MLM Accuracy | **77.55%** |
+| MLM Loss | 1.3108 |
+| Perplexity | **3.7090** |
+| Top-5 Accuracy | 85.71% |
+| Top-10 Accuracy | 87.76% |
+| Masked Tokens | 147 |
+
+---
+
+##
 
 ![alt text](results/combined.png)
 ![alt text](results/graphcodebert_all_metrics.png)
