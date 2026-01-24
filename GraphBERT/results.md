@@ -1,4 +1,4 @@
-***STEP 1: Train base model on Erlang***
+**STEP 1: Train base model on Erlang**
 Batch size: 32
 Loaded 40 functions from output/graphcodebert_data/train.jsonl
 Loaded 5 functions from output/graphcodebert_data/valid.jsonl
