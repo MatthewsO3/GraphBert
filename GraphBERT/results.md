@@ -86,6 +86,6 @@
 ---
 
 ##
+<img width="3913" height="3361" alt="graphcodebert_all_metrics" src="https://github.com/user-attachments/assets/3bca09fa-a818-4e22-89fd-7969ebca6f57" />
+<img width="3524" height="2670" alt="combined" src="https://github.com/user-attachments/assets/3e4176cc-1edf-4f45-8c79-12de7f8231f5" />
 
-![alt text](results/combined.png)
-![alt text](results/graphcodebert_all_metrics.png)
