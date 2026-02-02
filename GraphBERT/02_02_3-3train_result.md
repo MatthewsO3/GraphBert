@@ -8,11 +8,6 @@ This document summarizes the step-by-step training and evaluation results for th
 
 ### Base Model — C++
 
-**Dataset**
-- Data file: `data/val.jsonl`
-- Snippets evaluated: **1000**
-- Total masked tokens: **43,221**
-
 **Metrics**
 - Top-1 Accuracy: **68.92%** (29,789 / 43,221)
 - Top-5 Accuracy: **78.83%** (34,072 / 43,221)
@@ -55,11 +50,6 @@ This document summarizes the step-by-step training and evaluation results for th
 
 ### Evaluation — C++
 
-**Dataset**
-- Data file: `data/val.jsonl`
-- Snippets evaluated: **2500**
-- Total masked tokens: **109,380**
-
 **Metrics**
 - Top-1 Accuracy: **63.42%** (69,372 / 109,380)
 - Top-5 Accuracy: **75.05%** (82,091 / 109,380)
@@ -91,11 +81,6 @@ This document summarizes the step-by-step training and evaluation results for th
 
 ### Evaluation — C++
 
-**Dataset**
-- Data file: `data/val.jsonl`
-- Snippets evaluated: **2500**
-- Total masked tokens: **109,380**
-
 **Metrics**
 - Top-1 Accuracy: **83.38%** (91,206 / 109,380)
 - Top-5 Accuracy: **92.56%** (101,238 / 109,380)
@@ -124,12 +109,6 @@ This document summarizes the step-by-step training and evaluation results for th
 - Total masked tokens: **16,493**
 
 ### Evaluation — C++
-
-**Dataset**
-- Data file: `data/val.jsonl`
-- Snippets evaluated: **2500**
-- Snippets skipped: **2**
-- Total masked tokens: **109,380**
 
 **Metrics**
 - Top-1 Accuracy: **63.40%** (69,350 / 109,380)
@@ -161,11 +140,6 @@ This document summarizes the step-by-step training and evaluation results for th
 - Total masked tokens: **16,699**
 
 ### Evaluation — C++
-
-**Dataset**
-- Data file: `data/val.jsonl`
-- Snippets evaluated: **2500**
-- Total masked tokens: **109,380**
 
 **Metrics**
 - Top-1 Accuracy: **83.69%** (91,541 / 109,380)
@@ -199,11 +173,6 @@ This document summarizes the step-by-step training and evaluation results for th
 
 ### Evaluation — C++
 
-**Dataset**
-- Data file: `data/val.jsonl`
-- Snippets evaluated: **2500**
-- Total masked tokens: **109,380**
-
 **Metrics**
 - Top-1 Accuracy: **63.94%** (69,940 / 109,380)
 - Top-5 Accuracy: **75.44%** (82,519 / 109,380)
@@ -234,12 +203,6 @@ This document summarizes the step-by-step training and evaluation results for th
 - Total masked tokens: **16,763**
 
 ### Evaluation — C++
-
-**Dataset**
-- Data file: `data/val.jsonl`
-- Snippets evaluated: **2500**
-- Snippets skipped: **2**
-- Total masked tokens: **109,380**
 
 **Metrics**
 - Top-1 Accuracy: **83.63%** (91,473 / 109,380)
