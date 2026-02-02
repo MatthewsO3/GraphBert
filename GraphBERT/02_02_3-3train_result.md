@@ -9,9 +9,9 @@ This document summarizes the step-by-step training and evaluation results for th
 ### Base Model — C++
 
 **Metrics**
-- Top-1 Accuracy: **68.92%** (29,789 / 43,221)
-- Top-5 Accuracy: **78.83%** (34,072 / 43,221)
-- Perplexity: **79.5706**
+- Top-1 Accuracy: **67.10%** (73395/109380)
+- Top-5 Accuracy: **77.87%** (85178/109380)
+- Perplexity: **96.4124**
 
 ---
 
@@ -250,8 +250,7 @@ This document summarizes the step-by-step training and evaluation results for th
   -----------------------------------------------------------------------------
     Step Description   Top-1 Accuracy Top-5 Accuracy Perplexity   Masked Tokens
   ------ ------------- -------------- -------------- ------------ -------------
-       0 Base (STEP 1) 68.92% (29,789 78.83% (34,072 79.5706      43,221
-                       / 43,221)      / 43,221)                   
+       0 Base (STEP 1)     67.10%       77.87%          96,4124      109,380                    
 
        1 STEP 2 ---    63.42% (69,372 75.05% (82,091 169.0928     109,380
          After Erlang  / 109,380)     / 109,380)                  
