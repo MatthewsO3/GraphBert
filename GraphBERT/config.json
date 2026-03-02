@@ -6,20 +6,21 @@
     "edge_sample_ratio": 0.5
   },
    "data": {
-    "output_file": "data/cpp_functions.jsonl",
+    "output_file": "/home/mczap/GraphBert/GraphBERT/data/mixed_cpp_2x_erlang_train.jsonl",
     "max_samples": 100,
     "code_tokens_max": 512,
     "dfg_max_nodes": 64,
     "num_workers": 4
   },
   "train": {
-    "data_file": "data/cpp_functions.jsonl",
-    "output_dir": "models",
-    "batch_size": 1,
-    "epochs": 1,
+    "data_file": "/home/mczap/GraphBert/GraphBERT/data/mixed_train_tokenized.jsonl",
+    "output_dir": "models/20k_20k_mixed_retokenized",
+    "checkpoint_path": "",
+    "batch_size": 32,
+    "epochs": 8,
     "learning_rate": 2e-5,
-    "max_length": 126,
-    "warmup_steps": 5,
+    "max_length": 256,
+    "warmup_steps": 500,
     "mlm_probability": 0.15,
     "validation_split": 0.15,
     "weight_decay": 0.01,

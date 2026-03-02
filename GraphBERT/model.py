@@ -77,53 +77,81 @@ class GraphCodeBERTDataset(Dataset):
     def convert_sample_to_features(self, sample: Dict) -> Dict:
         code_tokens = sample['code_tokens']
         dfg = sample.get('dataflow_graph', [])
+
+        # ── Step 1: hard caps so nothing can ever exceed max_length ──────────
+        # Layout: [CLS] + code(N) + [SEP] + dfg(D) + [SEP]  →  N + D + 3 <= max_length
+        MAX_DFG   = min(64, self.max_length // 4)          # at most 25% of budget for DFG
+        MAX_CODE  = self.max_length - MAX_DFG - 3          # remaining for code
+
+        code_tokens = code_tokens[:MAX_CODE]
+        valid_code_len = len(code_tokens)
+
+        # ── Step 2: build DFG index from the (already truncated) token range ─
         adj = defaultdict(list)
         dfg_nodes, node_to_idx = [], {}
 
-        # Extract DFG relationships
         for var, use_pos, _, _, dep_pos_list in dfg:
+            if use_pos >= valid_code_len:          # out of range after code truncation
+                continue
             if use_pos not in node_to_idx:
                 node_to_idx[use_pos] = len(dfg_nodes)
                 dfg_nodes.append((var, use_pos))
+            use_idx = node_to_idx[use_pos]
+
             for def_pos in dep_pos_list:
+                if def_pos >= valid_code_len:      # out of range
+                    continue
                 if def_pos not in node_to_idx:
                     node_to_idx[def_pos] = len(dfg_nodes)
                     dfg_nodes.append((var, def_pos))
-                adj[node_to_idx[use_pos]].append(node_to_idx[def_pos])
+                adj[use_idx].append(node_to_idx[def_pos])
+
+        # ── Step 3: cap DFG node count ────────────────────────────────────────
+        if len(dfg_nodes) > MAX_DFG:
+            keep = set(range(MAX_DFG))
+            dfg_nodes = dfg_nodes[:MAX_DFG]
+            adj = defaultdict(list, {
+                i: [j for j in adjs if j in keep]
+                for i, adjs in adj.items()
+                if i in keep
+            })
 
         dfg_token_count = len(dfg_nodes)
-        max_code_len = self.max_length - dfg_token_count - 3
 
-        if len(code_tokens) > max_code_len:
-            code_tokens = code_tokens[:max_code_len]
+        # ── Step 4: final sanity check on total length ────────────────────────
+        total = valid_code_len + dfg_token_count + 3      # +3 for CLS, SEP, SEP
+        assert total <= self.max_length, \
+            f"Still too long after capping: code={valid_code_len} dfg={dfg_token_count} total={total}"
 
+        # ── Step 5: build token sequence ─────────────────────────────────────
         tokens = [self.tokenizer.cls_token] + code_tokens + [self.tokenizer.sep_token]
         dfg_start_pos = len(tokens)
         tokens.extend([self.tokenizer.unk_token] * dfg_token_count)
         tokens.append(self.tokenizer.sep_token)
 
-        input_ids = self.tokenizer.convert_tokens_to_ids(tokens)
-        position_idx = list(range(len(code_tokens) + 2)) + [0] * dfg_token_count + [len(code_tokens) + 2]
+        input_ids   = self.tokenizer.convert_tokens_to_ids(tokens)
+        position_idx = (list(range(valid_code_len + 2))
+                        + [0] * dfg_token_count
+                        + [valid_code_len + 2])
 
         padding_len = self.max_length - len(input_ids)
+        input_ids    += [self.tokenizer.pad_token_id] * padding_len
+        position_idx += [0] * padding_len
 
-        input_ids.extend([self.tokenizer.pad_token_id] * padding_len)
-        position_idx.extend([0] * padding_len)
-
+        # ── Step 6: attention mask ────────────────────────────────────────────
         attn_mask = np.zeros((self.max_length, self.max_length), dtype=np.bool_)
-        code_len = len(code_tokens) + 2
+        code_len  = valid_code_len + 2          # CLS + code + SEP
 
-        attn_mask[:code_len, :code_len] = True
+        attn_mask[:code_len, :code_len] = True  # code attends to code
 
-        for i in range(len(tokens)):
+        for i in range(len(tokens)):            # every real token attends to itself
             attn_mask[i, i] = True
 
         for i, (_, code_pos) in enumerate(dfg_nodes):
-            if code_pos + 1 < code_len:
-                dfg_abs = dfg_start_pos + i
-                code_abs = code_pos + 1
-                attn_mask[dfg_abs, code_abs] = True
-                attn_mask[code_abs, dfg_abs] = True
+            dfg_abs  = dfg_start_pos + i
+            code_abs = code_pos + 1             # +1 for CLS
+            attn_mask[dfg_abs, code_abs] = True
+            attn_mask[code_abs, dfg_abs] = True
 
         for i, adjs in adj.items():
             for j in adjs:
@@ -131,20 +159,19 @@ class GraphCodeBERTDataset(Dataset):
                 attn_mask[u, v] = True
                 attn_mask[v, u] = True
 
-        assert len(input_ids) == self.max_length
+        assert len(input_ids)  == self.max_length
         assert len(position_idx) == self.max_length
         assert attn_mask.shape == (self.max_length, self.max_length)
 
         return {
-            'input_ids': torch.tensor(input_ids, dtype=torch.long),
-            'attention_mask': torch.tensor(attn_mask, dtype=torch.bool),
-            'position_idx': torch.tensor(position_idx, dtype=torch.long),
+            'input_ids':      torch.tensor(input_ids,   dtype=torch.long),
+            'attention_mask': torch.tensor(attn_mask,   dtype=torch.bool),
+            'position_idx':   torch.tensor(position_idx, dtype=torch.long),
             'dfg_info': {
                 'nodes': dfg_nodes,
                 'edges': [(i, j) for i, adjs in adj.items() for j in adjs]
             }
         }
-
 
 class GraphCodeBERTWithEdgePrediction(nn.Module):
     """
@@ -421,6 +448,9 @@ class MLMWithEdgePredictionCollator:
                 has_edge = 1 if (u, v) in edge_set else 0
                 u_pos = dfg_nodes[u][1] + 1
                 v_pos = dfg_nodes[v][1] + 1
+                # ✅ FIX: Skip if positions exceed sequence length
+                if u_pos >= max_seq_length or v_pos >= max_seq_length:
+                    continue
                 edge_pairs.append((i, u_pos, v_pos, has_edge))
 
         if edge_pairs:
