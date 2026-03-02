@@ -1,0 +1,18 @@
+{
+  "snippets_evaluated": 1000,
+  "total_masked_tokens": 43221,
+  "top1_accuracy": 0.6674995951042317,
+  "top5_accuracy": 0.7774461488628213,
+  "perplexity": 101.5058435129895,
+  "top1_correct": 28850,
+  "top5_correct": 33602,
+  "snippets_skipped": 1,
+  "config": {
+    "data_file": "data/val.jsonl",
+    "max_examples": null,
+    "mask_ratio": 0.15,
+    "top_k": 10,
+    "max_seq_length": 512,
+    "model_checkpoint": "/home/mczap/erlangbert/erlang_corpus_scraper/models/erlang_graphcodebert/checkpoint-initial"
+  }
+}

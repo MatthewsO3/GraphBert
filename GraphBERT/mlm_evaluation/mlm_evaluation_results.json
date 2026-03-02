@@ -1,0 +1,14 @@
+{
+  "java": {
+    "language": "java",
+    "error": "'MLMEvaluator' object has no attribute 'compute_mlm_loss'"
+  },
+  "python": {
+    "language": "python",
+    "error": "'MLMEvaluator' object has no attribute 'compute_mlm_loss'"
+  },
+  "javascript": {
+    "language": "javascript",
+    "error": "'MLMEvaluator' object has no attribute 'compute_mlm_loss'"
+  }
+}

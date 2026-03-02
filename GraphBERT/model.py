@@ -1,4 +1,6 @@
-
+"""
+Fixed model.py - Proper checkpoint loading with correct Module initialization
+"""
 
 import json
 import os
@@ -13,7 +15,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
 from tqdm import tqdm
-from transformers import RobertaForMaskedLM, RobertaTokenizer
+from transformers import RobertaForMaskedLM, RobertaTokenizer, RobertaConfig
 
 
 def find_project_root(start_path: Path = None) -> Path:
@@ -147,24 +149,8 @@ class GraphCodeBERTDataset(Dataset):
 
 
 class GraphCodeBERTWithEdgePrediction(nn.Module):
-    """
-    Unified GraphCodeBERT model accepting both Erlang and C++ input formats.
-
-    ERLANG format inputs:
-    - position_idx: [batch, seq_len]
-    - edge_candidates: [batch, max_edges, 2]
-    - edge_labels: [batch, max_edges]
-    - alignment_candidates, alignment_labels (optional)
-    - dfg_start_idx
-
-    C++ format inputs:
-    - position_ids: [batch, seq_len]
-    - edge_batch_idx, edge_node1_pos, edge_node2_pos, edge_labels
-
-    Returns:
-    - dict with keys: loss, mlm_loss, edge_loss
-    """
-
+    """Unified GraphCodeBERT model accepting both Erlang and C++ input formats."""
+    
     def __init__(self, base_model_name: Optional[str] = None):
         super().__init__()
 
@@ -198,47 +184,41 @@ class GraphCodeBERTWithEdgePrediction(nn.Module):
         )
 
     def forward(
-            self,
-            input_ids,
-            attention_mask,
-            labels=None,
-
-            # C++ format
-            position_ids=None,
-            edge_batch_idx=None,
-            edge_node1_pos=None,
-            edge_node2_pos=None,
-
-            # Erlang format
-            position_idx=None,
-            edge_candidates=None,
-            alignment_candidates=None,
-            alignment_labels=None,
-            dfg_start_idx=None,
-
-            edge_labels=None,
-            **kwargs
+        self, 
+        input_ids,
+        attention_mask,
+        labels=None,
+        
+        # C++ format
+        position_ids=None,
+        edge_batch_idx=None,
+        edge_node1_pos=None,
+        edge_node2_pos=None,
+        
+        # Erlang format
+        position_idx=None,
+        edge_candidates=None,
+        alignment_candidates=None,
+        alignment_labels=None,
+        dfg_start_idx=None,
+        
+        edge_labels=None,
+        **kwargs
     ):
-        """
-        Flexible forward pass accepting both Erlang and C++ input formats.
-
-        Automatically detects format and converts as needed.
-        """
-
+        """Flexible forward pass accepting both Erlang and C++ input formats."""
+        
         # Step 1: Normalize position input
         if position_ids is None and position_idx is not None:
             position_ids = position_idx
         elif position_ids is None:
-            # Generate default positions
             batch_size, seq_len = input_ids.shape
             position_ids = torch.arange(seq_len, device=input_ids.device).unsqueeze(0).expand(batch_size, -1)
-
+        
         # Step 2: Convert edge format if needed
-        # If Erlang format is provided (edge_candidates), convert to C++ format
         if edge_candidates is not None and edge_batch_idx is None:
             edge_batch_idx, edge_node1_pos, edge_node2_pos = \
                 self._convert_erlang_edges_to_cpp(edge_candidates)
-
+        
         # Step 3: MLM forward pass
         mlm_outputs = self.roberta_mlm(
             input_ids=input_ids,
@@ -253,14 +233,14 @@ class GraphCodeBERTWithEdgePrediction(nn.Module):
         edge_loss = None
         if (edge_batch_idx is not None and len(edge_batch_idx) > 0 and
                 edge_node1_pos is not None and edge_node2_pos is not None and edge_labels is not None):
+            
             hidden_states = mlm_outputs.hidden_states[-1]
-
+            
             node1_repr = hidden_states[edge_batch_idx, edge_node1_pos]
             node2_repr = hidden_states[edge_batch_idx, edge_node2_pos]
             edge_repr = torch.cat([node1_repr, node2_repr], dim=-1)
             edge_logits = self.edge_classifier(edge_repr).squeeze(-1)
-
-            # Ensure edge_labels is float for BCE loss
+            
             edge_labels_float = edge_labels.float() if edge_labels.dtype != torch.float32 else edge_labels
             edge_loss = nn.functional.binary_cross_entropy_with_logits(edge_logits, edge_labels_float)
 
@@ -274,7 +254,6 @@ class GraphCodeBERTWithEdgePrediction(nn.Module):
         else:
             total_loss = torch.tensor(0.0, device=input_ids.device, requires_grad=True)
 
-        # Return as dict for consistency
         return {
             'loss': total_loss,
             'mlm_loss': mlm_loss,
@@ -282,31 +261,24 @@ class GraphCodeBERTWithEdgePrediction(nn.Module):
         }
 
     def _convert_erlang_edges_to_cpp(self, edge_candidates: torch.Tensor) -> tuple:
-        """
-        Convert Erlang edge format to C++ edge format.
-
-        Erlang: [batch_size, max_edges, 2] → each [..., :2] contains [node1_pos, node2_pos]
-        C++: Returns (edge_batch_idx, edge_node1_pos, edge_node2_pos)
-        """
+        """Convert Erlang edge format to C++ edge format."""
         batch_size = edge_candidates.shape[0]
-
+        
         batch_indices = []
         node1_positions = []
         node2_positions = []
-
+        
         for batch_idx in range(batch_size):
-            edges = edge_candidates[batch_idx]  # [max_edges, 2]
-
-            # Filter out padding (assume padding is [0, 0])
+            edges = edge_candidates[batch_idx]
             valid_edges = edges[(edges[:, 0] != 0) | (edges[:, 1] != 0)]
-
+            
             if len(valid_edges) > 0:
                 batch_indices.extend([batch_idx] * len(valid_edges))
                 node1_positions.extend(valid_edges[:, 0].tolist())
                 node2_positions.extend(valid_edges[:, 1].tolist())
-
+        
         device = edge_candidates.device
-
+        
         if len(batch_indices) > 0:
             return (
                 torch.tensor(batch_indices, dtype=torch.long, device=device),
@@ -321,22 +293,95 @@ class GraphCodeBERTWithEdgePrediction(nn.Module):
             )
 
     def save_pretrained(self, save_directory):
-        """
-        Save only the base model (roberta_mlm), not the edge_classifier.
-        This makes it compatible with HuggingFace's from_pretrained() and
-        allows Erlang script to load it.
-        """
-        self.roberta_mlm.save_pretrained(save_directory)
-        print(f"✓ Base model saved to {save_directory}")
-        print(f"  Note: edge_classifier is NOT saved (it gets re-initialized on load)")
+        """Save model in Erlang-compatible format."""
+        save_dir = Path(save_directory)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        
+        checkpoint = {
+            'model_state_dict': self.roberta_mlm.state_dict(),
+            'config': self.roberta_mlm.config.to_dict()
+        }
+        
+        model_bin_path = save_dir / "model.bin"
+        torch.save(checkpoint, model_bin_path)
+        print(f"✓ Model saved to {model_bin_path}")
+        
+        self.roberta_mlm.config.save_pretrained(save_directory)
+        print(f"✓ Config saved to {save_directory}")
 
     @classmethod
     def from_pretrained(cls, model_name_or_path, **kwargs):
-        """
-        Load model from pretrained checkpoint.
-        Creates instance with base model, edge_classifier gets fresh initialization.
-        """
-        instance = cls(model_name_or_path)
+        """Load model from Erlang checkpoint (custom format)."""
+        checkpoint_path = Path(model_name_or_path)
+        device = kwargs.get('device', 'cpu')
+        
+        print(f"  Loading checkpoint from: {checkpoint_path}")
+        
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+        
+        # STEP 1: Load the checkpoint file
+        model_bin_path = checkpoint_path / "model.bin"
+        
+        if not model_bin_path.exists():
+            raise FileNotFoundError(
+                f"model.bin not found in {checkpoint_path}\n"
+                f"Available files: {list(checkpoint_path.iterdir())}"
+            )
+        
+        print(f"  Loading model.bin...")
+        checkpoint = torch.load(model_bin_path, map_location='cpu', weights_only=False)
+        
+        # STEP 2: Extract state_dict and config from checkpoint
+        if not isinstance(checkpoint, dict) or 'model_state_dict' not in checkpoint:
+            raise ValueError(
+                f"Unexpected checkpoint format\n"
+                f"Expected dict with 'model_state_dict' key\n"
+                f"Got: {type(checkpoint)}"
+            )
+        
+        state_dict = checkpoint['model_state_dict']
+        config_dict = checkpoint.get('config', {})
+        print(f"  ✓ Found model_state_dict ({len(state_dict)} keys)")
+        
+        # STEP 3: Create RobertaConfig from loaded config
+        if isinstance(config_dict, dict) and len(config_dict) > 0:
+            config = RobertaConfig(**config_dict)
+            print(f"  ✓ Created RobertaConfig from checkpoint")
+        else:
+            print(f"  ⚠ Using default base model config")
+            config = RobertaConfig.from_pretrained("microsoft/graphcodebert-base")
+        
+        # STEP 4: Create RobertaForMaskedLM with the loaded config
+        print(f"  Creating RobertaForMaskedLM with loaded config...")
+        roberta_mlm = RobertaForMaskedLM(config)
+        
+        # STEP 5: Load the state_dict into the model
+        print(f"  Loading state_dict...")
+        roberta_mlm.load_state_dict(state_dict, strict=False)
+        roberta_mlm = roberta_mlm.to(device)
+        
+        # STEP 6: Create GraphCodeBERTWithEdgePrediction instance properly
+        print(f"  Creating GraphCodeBERTWithEdgePrediction wrapper...")
+        
+        # Create instance properly by initializing parent Module class
+        instance = cls.__new__(cls)
+        nn.Module.__init__(instance)  # Initialize the Module parent class properly
+        
+        # Now assign the modules
+        instance.roberta_mlm = roberta_mlm
+        
+        # Initialize edge_classifier
+        hidden_size = roberta_mlm.config.hidden_size
+        instance.edge_classifier = nn.Sequential(
+            nn.Linear(hidden_size * 2, hidden_size),
+            nn.Tanh(),
+            nn.Dropout(0.2),
+            nn.Linear(hidden_size, 1)
+        ).to(device)
+        
+        print(f"  ✓ Model loaded successfully!")
+        
         return instance
 
 
@@ -437,7 +482,7 @@ class MLMWithEdgePredictionCollator:
         return {
             'input_ids': masked_ids,
             'attention_mask': attn_mask,
-            'position_ids': pos_idx,  # C++ script expects position_ids
+            'position_ids': pos_idx,
             'labels': labels,
             'edge_batch_idx': edge_batch_idx,
             'edge_node1_pos': edge_node1_pos,

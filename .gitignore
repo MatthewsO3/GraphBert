@@ -30,7 +30,11 @@ models/
 .idea/
 .venv/
 .DS_Store
-
+/best_model
+checkpoints/
+models_erlang1_cpp1_train/
+models_erlang2_cpp2_train/
+models_erlang3_cpp3_train/
 # PyInstaller
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.

@@ -1,3 +1,5 @@
+#python javascript_eval.py --data_file /home/mczap/GraphBert/GraphBERT/data/javascript/train.jsonl --model_checkpoint /home/mczap/GraphBert/GraphBERT/models_erlang3_cpp3_train/best_model --mask_ratio 0.15 --top_k 10 --max_examples 500  --max_seq_length 512 --output_file results/evaluation_results_javascript.json
+
 import json
 import os
 import random
@@ -12,15 +14,12 @@ from tqdm import tqdm
 
 try:
     from tree_sitter import Language, Parser
-
-    import tree_sitter_cpp as tscpp
-
+    import tree_sitter_javascript as tsjs
     TS_AVAILABLE = True
-    CPP_LANGUAGE = Language(tscpp.language())
-    ts_parser = Parser(CPP_LANGUAGE)
+    JS_LANGUAGE = Language(tsjs.language())
+    ts_parser = Parser(JS_LANGUAGE)
 except ImportError:
     TS_AVAILABLE = False
-    print("Warning: tree_sitter/tree_sitter_cpp not found. DFG extraction will fail.")
 
 random.seed(42)
 torch.manual_seed(42)
@@ -37,7 +36,7 @@ def find_project_root(start_path: Path = None) -> Path:
             return current
 
         parent = current.parent
-        if parent == current:  # Reached filesystem root
+        if parent == current:
             raise FileNotFoundError(
                 "Could not find project root. "
                 "Make sure config.json exists in the project root directory."
@@ -57,45 +56,33 @@ def load_config() -> Dict:
 
 
 def load_test_snippets_from_jsonl(jsonl_file: str, max_examples: Optional[int] = None) -> List[str]:
-    """
-    Load code snippets from a JSONL file.
-    
-    Args:
-        jsonl_file: Path to JSONL file (relative to project root or absolute)
-        max_examples: Maximum number of examples to load (None = all)
-    
-    Returns:
-        List of code strings
-    """
     project_root = find_project_root()
-    
-    # Try to resolve path
+
     if os.path.isabs(jsonl_file):
         file_path = Path(jsonl_file)
     else:
         file_path = project_root / jsonl_file
-    
+
     if not file_path.exists():
         raise FileNotFoundError(f"JSONL file not found: {file_path}")
-    
+
     snippets = []
     print(f"Loading snippets from {file_path}...")
-    
+
     with open(file_path, 'r', encoding='utf-8') as f:
         for i, line in enumerate(f):
             if max_examples and i >= max_examples:
                 break
-            
+
             try:
                 data = json.loads(line.strip())
-                # Try 'code' field first, then fall back to 'code' or other fields
                 code = data.get('code') or data.get('source_code')
                 if code:
                     snippets.append(code)
             except json.JSONDecodeError:
                 print(f"Warning: Line {i+1} is not valid JSON, skipping")
                 continue
-    
+
     print(f"Successfully loaded {len(snippets)} snippets from {file_path}\n")
     return snippets
 
@@ -107,16 +94,15 @@ class MLMEvaluator:
 
         self.device = torch.device(device or ('cuda' if torch.cuda.is_available() else 'cpu'))
         self.max_seq_length = max_seq_length
-        self.max_code_tokens = max_seq_length - 2  # Reserve 2 for [CLS] and [SEP]
-        
+        self.max_code_tokens = max_seq_length - 2
+
         print(f"Using device: {self.device}")
         print(f"Max sequence length: {max_seq_length}")
         print(f"Loading model from {model_path}...")
 
         self.tokenizer = tokenizer
         self.is_pretrained = model_path in ["microsoft/graphcodebert-base"] or "/" in model_path
-        
-        # Try to load as HuggingFace pretrained model first (includes HuggingFace Hub models)
+
         try:
             self.model = RobertaForMaskedLM.from_pretrained(model_path).to(self.device).eval()
             source = "HuggingFace Hub" if self.is_pretrained else "local checkpoint"
@@ -124,25 +110,23 @@ class MLMEvaluator:
         except Exception as e:
             print(f"Failed to load from HuggingFace: {e}")
             print("Trying custom format...")
-            
-            # Load custom format: model.bin with {'model_state_dict': ..., 'config': ...}
+
             import os
             model_bin_path = os.path.join(model_path, 'model.bin')
-            
+
             if not os.path.exists(model_bin_path):
                 raise FileNotFoundError(f"No model file found in {model_path}")
-            
+
             checkpoint = torch.load(model_bin_path, map_location=self.device, weights_only=False)
-            
+
             if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-                # Our custom format
                 from transformers import RobertaConfig
                 config_dict = checkpoint.get('config', {})
                 if isinstance(config_dict, dict):
                     config = RobertaConfig(**config_dict)
                 else:
                     config = config_dict
-                
+
                 self.model = RobertaForMaskedLM(config).to(self.device)
                 self.model.load_state_dict(checkpoint['model_state_dict'], strict=False)
                 print("Model loaded successfully (custom format)!\n")
@@ -156,7 +140,7 @@ class MLMEvaluator:
         tokens, node_map = [], {}
 
         def find_tokens(node):
-            if node.type in ['identifier', 'field_identifier']:
+            if node.type in ['identifier']:
                 if id(node) not in node_map:
                     node_map[id(node)] = len(tokens)
                     tokens.append(node)
@@ -167,11 +151,13 @@ class MLMEvaluator:
 
         def is_def(node):
             p = node.parent
-            return p and (p.type in ['declaration', 'init_declarator', 'parameter_declaration'] or
+            return p and (p.type in ['variable_declarator', 'formal_parameters',
+                                      'function_declaration', 'arrow_function',
+                                      'catch_clause', 'for_in_statement'] or
                           (p.type == 'assignment_expression' and node == p.child_by_field_name('left')))
 
         def find_vars(node):
-            if node.type in ['identifier', 'field_identifier']:
+            if node.type in ['identifier']:
                 name = code_bytes[node.start_byte:node.end_byte].decode('utf8', 'ignore')
                 pos = node_map.get(id(node), -1)
                 if pos != -1:
@@ -237,44 +223,29 @@ class MLMEvaluator:
         }
 
     def evaluate_snippet(self, code: str, mask_ratio: float, top_k: int) -> Optional[Dict]:
-        """
-        Evaluate MLM performance on a code snippet.
-        
-        Args:
-            code: Source code string
-            mask_ratio: Ratio of tokens to mask (0.0-1.0)
-            top_k: Number of top predictions to consider
-        
-        Returns:
-            Dictionary with evaluation results or None if snippet fails
-        """
         code_tokens = self.tokenizer.tokenize(code, add_prefix_space=True)
         if not code_tokens:
             return None
 
-        # Truncate to fit within model's max sequence length
         if len(code_tokens) > self.max_code_tokens:
             code_tokens = code_tokens[:self.max_code_tokens]
 
-        # Ensure minimum tokens for masking
         if len(code_tokens) < 2:
             return None
 
         num_mask = max(1, int(len(code_tokens) * mask_ratio))
-        
-        # Ensure we don't try to mask more tokens than available
+
         if num_mask > len(code_tokens):
             num_mask = len(code_tokens)
-        
+
         if num_mask < 1:
             return None
-        
+
         try:
             mask_pos = sorted(random.sample(range(len(code_tokens)), num_mask))
         except ValueError:
-            # Can't sample: not enough tokens
             return None
-        
+
         orig_tokens = [code_tokens[i] for i in mask_pos]
         masked_tokens = code_tokens.copy()
 
@@ -283,15 +254,13 @@ class MLMEvaluator:
 
         try:
             inputs = self.preprocess_for_graphcodebert(code, masked_tokens)
-        except Exception as e:
-            # Skip snippets that fail preprocessing
+        except Exception:
             return None
 
         with torch.no_grad():
             try:
                 logits = self.model(**{k: v.to(self.device) for k, v in inputs.items()}).logits
-            except RuntimeError as e:
-                # Skip snippets that cause tensor size errors
+            except RuntimeError:
                 return None
 
         top1_correct, top5_correct, log_probs = 0, 0, []
@@ -349,50 +318,15 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description='Evaluate GraphCodeBERT MLM model on C++ code from JSONL file'
+        description='Evaluate GraphCodeBERT MLM model on JavaScript code from JSONL file'
     )
-    parser.add_argument(
-        '--data_file',
-        type=str,
-        default=None,
-        help='Path to JSONL file with test data (relative to project root or absolute)'
-    )
-    parser.add_argument(
-        '--max_examples',
-        type=int,
-        default=None,
-        help='Maximum number of examples to evaluate (None = all)'
-    )
-    parser.add_argument(
-        '--mask_ratio',
-        type=float,
-        default=None,
-        help='Ratio of tokens to mask'
-    )
-    parser.add_argument(
-        '--top_k',
-        type=int,
-        default=None,
-        help='Top-k predictions to consider'
-    )
-    parser.add_argument(
-        '--model_checkpoint',
-        type=str,
-        default='best_model',
-        help='Model checkpoint name or HuggingFace model ID'
-    )
-    parser.add_argument(
-        '--output_file',
-        type=str,
-        default=None,
-        help='Path to save evaluation results (relative to project root)'
-    )
-    parser.add_argument(
-        '--max_seq_length',
-        type=int,
-        default=512,
-        help='Maximum sequence length for model (default 512)'
-    )
+    parser.add_argument('--data_file', type=str, default=None)
+    parser.add_argument('--max_examples', type=int, default=None)
+    parser.add_argument('--mask_ratio', type=float, default=None)
+    parser.add_argument('--top_k', type=int, default=None)
+    parser.add_argument('--model_checkpoint', type=str, default='best_model')
+    parser.add_argument('--output_file', type=str, default=None)
+    parser.add_argument('--max_seq_length', type=int, default=512)
 
     try:
         config = load_config()
@@ -406,7 +340,7 @@ def main():
     args = parser.parse_args()
 
     print("\n" + "=" * 70)
-    print("GraphCodeBERT MLM Evaluation (from JSONL)".center(70))
+    print("GraphCodeBERT MLM Evaluation (JavaScript, from JSONL)".center(70))
     print("=" * 70)
     print(f"Project root: {project_root}")
     print("\nEvaluation Configuration:")
@@ -414,55 +348,31 @@ def main():
         print(f"  {k}: {v}")
     print("=" * 70 + "\n")
 
-    # Get data file from args or config
-    data_file = args.data_file
-    if data_file is None:
-        data_file = eval_config.get('data_file', None)
-    
+    data_file = args.data_file or eval_config.get('data_file', None)
     if data_file is None:
         print("Error: --data_file must be specified (either as argument or in config)")
         exit(1)
 
-    # Get max examples from args or config
-    max_examples = args.max_examples
-    if max_examples is None:
-        max_examples = eval_config.get('max_examples', None)
-
-    # Get mask ratio from args or config
-    mask_ratio = args.mask_ratio
-    if mask_ratio is None:
-        mask_ratio = eval_config.get('mask_ratio', 0.15)
-
-    # Get top_k from args or config
-    top_k = args.top_k
-    if top_k is None:
-        top_k = eval_config.get('top_k', 10)
-
-    # Get max_seq_length from args or config
-    max_seq_length = args.max_seq_length
-    if max_seq_length is None:
-        max_seq_length = eval_config.get('max_seq_length', 512)
+    max_examples = args.max_examples or eval_config.get('max_examples', None)
+    mask_ratio = args.mask_ratio or eval_config.get('mask_ratio', 0.15)
+    top_k = args.top_k or eval_config.get('top_k', 10)
+    max_seq_length = args.max_seq_length or eval_config.get('max_seq_length', 512)
 
     print("Loading tokenizer from 'microsoft/graphcodebert-base'...")
     tokenizer = RobertaTokenizer.from_pretrained("microsoft/graphcodebert-base")
 
-    # Determine if model_checkpoint is a HuggingFace model ID or local path
     if args.model_checkpoint.startswith("microsoft/") or "/" in args.model_checkpoint:
-        # HuggingFace model ID - use directly
         model_path = args.model_checkpoint
         print(f"Using HuggingFace model: {model_path}")
     else:
-        # Local checkpoint - construct full path
         output_dir = project_root / config.get('train', {}).get('output_dir', 'results')
         model_path = output_dir / args.model_checkpoint
-
         if not model_path.exists():
             print(f"Error: Model checkpoint not found at {model_path}")
             exit(1)
 
     print(f"Model path: {model_path}\n")
 
-    # Load snippets from JSONL file
     try:
         snippets_to_evaluate = load_test_snippets_from_jsonl(data_file, max_examples)
     except FileNotFoundError as e:
@@ -485,7 +395,7 @@ def main():
 
     print(f"Evaluating {len(snippets_to_evaluate)} snippets...\n")
 
-    for i, snippet in enumerate(tqdm(snippets_to_evaluate, desc="Evaluating"), 1):
+    for snippet in tqdm(snippets_to_evaluate, desc="Evaluating"):
         results = evaluator.evaluate_snippet(snippet, mask_ratio, top_k)
 
         if results:
@@ -534,17 +444,15 @@ def main():
         print(f"Perplexity:             {perplexity:.4f}")
         print("=" * 70 + "\n")
 
-        # Determine output path
         if args.output_file:
             if os.path.isabs(args.output_file):
                 results_path = Path(args.output_file)
             else:
                 results_path = project_root / args.output_file
         else:
-            # Default: use results directory
             output_dir = project_root / config.get('train', {}).get('output_dir', 'results')
-            results_path = output_dir / 'evaluation_results.json'
-        
+            results_path = output_dir / 'evaluation_results_javascript.json'
+
         save_evaluation_results(results_dict, results_path)
     else:
         print("No valid results to report.")

@@ -1,0 +1,47 @@
+{
+  "java": {
+    "language": "java",
+    "num_samples": 100,
+    "total_masked_tokens": 0,
+    "failed_samples": 100,
+    "top1_accuracy": 0.0,
+    "top5_accuracy": 0.0,
+    "top10_accuracy": 0.0,
+    "perplexity": 0.0,
+    "mean_log_prob": 0.0,
+    "total_top1": 0,
+    "total_top5": 0,
+    "total_top10": 0,
+    "timestamp": "2026-02-10T21:19:39.112577"
+  },
+  "python": {
+    "language": "python",
+    "num_samples": 100,
+    "total_masked_tokens": 0,
+    "failed_samples": 100,
+    "top1_accuracy": 0.0,
+    "top5_accuracy": 0.0,
+    "top10_accuracy": 0.0,
+    "perplexity": 0.0,
+    "mean_log_prob": 0.0,
+    "total_top1": 0,
+    "total_top5": 0,
+    "total_top10": 0,
+    "timestamp": "2026-02-10T21:19:47.795268"
+  },
+  "javascript": {
+    "language": "javascript",
+    "num_samples": 100,
+    "total_masked_tokens": 0,
+    "failed_samples": 100,
+    "top1_accuracy": 0.0,
+    "top5_accuracy": 0.0,
+    "top10_accuracy": 0.0,
+    "perplexity": 0.0,
+    "mean_log_prob": 0.0,
+    "total_top1": 0,
+    "total_top5": 0,
+    "total_top10": 0,
+    "timestamp": "2026-02-10T21:19:57.415096"
+  }
+}

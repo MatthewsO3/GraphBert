@@ -1,3 +1,4 @@
+"python python_data.py --max_samples 500 --output_dir data/python"
 import argparse
 import json
 import os
@@ -5,17 +6,20 @@ import random
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-
 from datasets import load_dataset
 from transformers import RobertaTokenizer
 from tree_sitter import Language, Parser
 from tqdm import tqdm
+import tree_sitter_python as tspy
+import tree_sitter_java as tsjava
 
-import tree_sitter_cpp as tscpp
+"""PYTHON_LANGUAGE = Language(tspy.language())
+ts_parser = Parser(PYTHON_LANGUAGE)
+print("Tree-sitter initialized")"""
 
-CPP_LANGUAGE = Language(tscpp.language())
-ts_parser = Parser(CPP_LANGUAGE)
-print("Tree-sitter initialized")
+JAVA_LANGUAGE = Language(tsjava.language())
+ts_parser = Parser(JAVA_LANGUAGE)
+print("Tree-sitter initialized for Java")
 
 tokenizer = RobertaTokenizer.from_pretrained("microsoft/graphcodebert-base")
 print("Tokenizer loaded")
@@ -62,11 +66,10 @@ def extract_dataflow_graph(code_bytes: bytes, tree) -> List[Tuple]:
     node_to_token_pos = {}
 
     def extract_tokens_recursive(node):
-        if node.type in ['identifier', 'field_identifier']:
+        if node.type in ['identifier']:
             if id(node) not in node_to_token_pos:
                 node_to_token_pos[id(node)] = len(tokens)
                 tokens.append(node)
-
         for child in node.children:
             extract_tokens_recursive(child)
 
@@ -76,19 +79,19 @@ def extract_dataflow_graph(code_bytes: bytes, tree) -> List[Tuple]:
         parent = node.parent
         if not parent:
             return False
-        if parent.type in ['declaration', 'init_declarator', 'parameter_declaration']:
+        if parent.type in ['local_variable_declaration', 'enhanced_for_statement',
+                    'formal_parameter', 'method_declaration', 'catch_formal_parameter']:
             return True
         if parent.type == 'assignment_expression' and node == parent.child_by_field_name('left'):
             return True
         return False
 
     def traverse_for_vars(node):
-        if node.type in ['identifier', 'field_identifier']:
+        if node.type in ['identifier']:
             var_name = code_bytes[node.start_byte:node.end_byte].decode('utf8', errors='ignore')
             token_pos = node_to_token_pos.get(id(node), -1)
             if token_pos != -1:
                 (var_definitions if is_definition(node) else var_uses)[var_name].append(token_pos)
-
         for child in node.children:
             traverse_for_vars(child)
 
@@ -114,7 +117,7 @@ def should_keep_code(code: str) -> bool:
     if lines < 3 or lines > 500:
         return False
 
-    if 'void ' not in code and 'int ' not in code and 'class ' not in code and 'std::' not in code:
+    if 'class ' not in code and 'void ' not in code and 'import ' not in code:
         return False
 
     return True
@@ -134,7 +137,7 @@ def preprocess_code(code: str, idx: int) -> Optional[Dict]:
             return None
 
         return {
-            'idx': f'cpp::{idx}',
+            'idx': f'python::{idx}',
             'code': code,
             'code_tokens': tokens,
             'dataflow_graph': dfg,
@@ -152,14 +155,14 @@ def stream_and_process_dataset(
     train_ratio: float = 0.9
 ) -> Tuple[int, int, int]:
     """
-    Process C++ dataset, split into train/val, and save to JSONL files.
-    
+    Process Python dataset, split into train/val, and save to JSONL files.
+
     Args:
         output_dir: Directory to save train.jsonl and val.jsonl
         max_samples: Maximum number of samples to process
         skip_num_snippets: Number of snippets to skip from the start
         train_ratio: Fraction for training set (default 0.9 for 90% train, 10% val)
-    
+
     Returns:
         Tuple of (total_processed, train_count, val_count)
     """
@@ -171,7 +174,7 @@ def stream_and_process_dataset(
     val_file = output_path / "val.jsonl"
 
     print("Loading dataset in streaming mode...")
-    dataset = load_dataset("codeparrot/github-code-clean", "C++-all", split="train", streaming=True)
+    dataset = load_dataset("codeparrot/github-code-clean", "Java-all", split="train", streaming=True)
 
     # Skip the first X snippets if specified
     if skip_num_snippets and skip_num_snippets > 0:
@@ -185,14 +188,14 @@ def stream_and_process_dataset(
     filtered_count = 0
     total_seen = 0
 
-    with tqdm(desc="Processing C++ files") as pbar:
+    with tqdm(desc="Processing Python files") as pbar:
         for example in dataset:
             if max_samples and len(processed_samples) >= max_samples:
                 break
 
             total_seen += 1
             code = example.get('code')
-            
+
             if not code or not should_keep_code(code):
                 filtered_count += 1
                 pbar.update(1)
@@ -207,17 +210,16 @@ def stream_and_process_dataset(
                 pbar.update(1)
 
     total_processed = len(processed_samples)
-    
+
     if total_processed == 0:
         print("Error: No valid samples were processed!")
         return 0, 0, 0
 
     # Second pass: split and write to files
     print(f"\nSecond pass: Splitting into train ({train_ratio:.0%}) and val ({1-train_ratio:.0%})...")
-    
+
     # Shuffle for random split
     random.shuffle(processed_samples)
-    
     split_idx = int(total_processed * train_ratio)
     train_samples = processed_samples[:split_idx]
     val_samples = processed_samples[split_idx:]
@@ -256,7 +258,7 @@ def stream_and_process_dataset(
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Extract DFG from C++ code and split into train/val sets'
+        description='Extract DFG from Python code and split into train/val sets'
     )
     parser.add_argument(
         '--output_dir',
@@ -310,7 +312,7 @@ def main():
         train_ratio = config.get('data', {}).get('train_ratio', 0.9)
 
     print("\n" + "=" * 70)
-    print("C++ Code Preprocessing Configuration")
+    print("Python Code Preprocessing Configuration")
     print("=" * 70)
     print(f"Project root: {project_root}")
     print(f"Output directory: {output_dir}")

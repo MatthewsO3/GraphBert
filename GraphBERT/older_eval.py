@@ -1,3 +1,5 @@
+"python older_eval.py --data_file /home/mczap/GraphBert/GraphBERT/data/python/train.jsonl --model_checkpoint /home/mczap/GraphBert/GraphBERT/models_erlang3_cpp3_train/best_model --mask_ratio 0.15 --top_k 10 --max_examples 500  --max_seq_length 512 --output_file results/evaluation_results_python.json"
+
 import json
 import os
 import random
@@ -13,14 +15,14 @@ from tqdm import tqdm
 try:
     from tree_sitter import Language, Parser
 
-    import tree_sitter_cpp as tscpp
+    import tree_sitter_python as tspy
 
     TS_AVAILABLE = True
-    CPP_LANGUAGE = Language(tscpp.language())
-    ts_parser = Parser(CPP_LANGUAGE)
+    PYTHON_LANGUAGE = Language(tspy.language())
+    ts_parser = Parser(PYTHON_LANGUAGE)
 except ImportError:
     TS_AVAILABLE = False
-    print("Warning: tree_sitter/tree_sitter_cpp not found. DFG extraction will fail.")
+    print("Warning: tree_sitter/tree_sitter_python not found. DFG extraction will fail.")
 
 random.seed(42)
 torch.manual_seed(42)
@@ -156,7 +158,7 @@ class MLMEvaluator:
         tokens, node_map = [], {}
 
         def find_tokens(node):
-            if node.type in ['identifier', 'field_identifier']:
+            if node.type in ['identifier']:
                 if id(node) not in node_map:
                     node_map[id(node)] = len(tokens)
                     tokens.append(node)
@@ -167,11 +169,11 @@ class MLMEvaluator:
 
         def is_def(node):
             p = node.parent
-            return p and (p.type in ['declaration', 'init_declarator', 'parameter_declaration'] or
-                          (p.type == 'assignment_expression' and node == p.child_by_field_name('left')))
+            return p and (p.type in ['assignment', 'for_statement', 'with_statement', 'function_definition', 'parameters', 'typed_parameter'] or
+                          (p.type == 'augmented_assignment' and node == p.child_by_field_name('left')))
 
         def find_vars(node):
-            if node.type in ['identifier', 'field_identifier']:
+            if node.type in ['identifier']:
                 name = code_bytes[node.start_byte:node.end_byte].decode('utf8', 'ignore')
                 pos = node_map.get(id(node), -1)
                 if pos != -1:
@@ -349,7 +351,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description='Evaluate GraphCodeBERT MLM model on C++ code from JSONL file'
+        description='Evaluate GraphCodeBERT MLM model on Python code from JSONL file'
     )
     parser.add_argument(
         '--data_file',
@@ -406,7 +408,7 @@ def main():
     args = parser.parse_args()
 
     print("\n" + "=" * 70)
-    print("GraphCodeBERT MLM Evaluation (from JSONL)".center(70))
+    print("GraphCodeBERT MLM Evaluation (Python, from JSONL)".center(70))
     print("=" * 70)
     print(f"Project root: {project_root}")
     print("\nEvaluation Configuration:")
@@ -543,7 +545,7 @@ def main():
         else:
             # Default: use results directory
             output_dir = project_root / config.get('train', {}).get('output_dir', 'results')
-            results_path = output_dir / 'evaluation_results.json'
+            results_path = output_dir / 'evaluation_results_python.json'
         
         save_evaluation_results(results_dict, results_path)
     else:
