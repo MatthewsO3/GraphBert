@@ -279,7 +279,7 @@ def main():
         # Generate plot
         if not args.summary_only:
             output_dir = history_path.parent
-            output_file = output_dir.parent / 'results' / 'graphcodebert_all_metrics.png'
+            output_file = output_dir.parent / 'graphcodebert_all_metrics.png'
             plot_all_metrics(history, output_file)
             print(f"✓ All metrics visualization complete!\n")
 

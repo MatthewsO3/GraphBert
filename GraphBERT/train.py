@@ -150,7 +150,7 @@ class PerformanceTracker:
 
 
 class ModelCheckpointManager:
-    def __init__(self, output_dir: str, keep_last_n: int = 2):
+    def __init__(self, output_dir: str, keep_last_n: int = 999):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.checkpoints_dir = self.output_dir / 'checkpoints'

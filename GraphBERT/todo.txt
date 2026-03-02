@@ -1,0 +1,64 @@
+Convert erlang dataset code tokens to Roberta tokens- check if graph needs to be mapped
+
+python mixed_eval.py --mask_ratio 0.15 --top_k 10  --cpp_val /home/mczap/GraphBert/GraphBERT/data/val.jsonl --erlang_val /home/mczap/GraphBert/GraphBERT/data/erlang_val_retokenized.jsonl --model_checkpoint /home/mczap/GraphBert/GraphBERT/models/20k_20k_mixed_retokenized/best_model
+
+
+======================================================================
+                     Evaluation Results — Erlang                      
+======================================================================
+Snippets evaluated:     2715
+Total masked tokens:    55034
+----------------------------------------------------------------------
+Top-1 Accuracy:         73.14% (40253/55034)
+Top-5 Accuracy:         84.93% (46741/55034)
+Perplexity:             35.4326
+======================================================================
+======================================================================
+                       Evaluation Results — C++                       
+======================================================================
+Snippets evaluated:     2500
+Total masked tokens:    109472
+----------------------------------------------------------------------
+Top-1 Accuracy:         69.16% (75707/109472)
+Top-5 Accuracy:         81.23% (88928/109472)
+Perplexity:             75.9740
+======================================================================
+
+======================================================================
+                          Evaluation Results                          
+======================================================================
+Data file:              /home/mczap/GraphBert/GraphBERT/data/java/train.jsonl
+Snippets evaluated:     500
+Snippets skipped:       0
+Total masked tokens:    22352
+----------------------------------------------------------------------
+Top-1 Accuracy:         88.83% (19855/22352)
+Top-5 Accuracy:         95.03% (21242/22352)
+Perplexity:             2.8786
+======================================================================
+
+======================================================================
+                          Evaluation Results                          
+======================================================================
+Data file:              /home/mczap/GraphBert/GraphBERT/data/python/train.jsonl
+Snippets evaluated:     500
+Snippets skipped:       0
+Total masked tokens:    20107
+----------------------------------------------------------------------
+Top-1 Accuracy:         84.62% (17014/20107)
+Top-5 Accuracy:         93.30% (18760/20107)
+Perplexity:             4.1489
+======================================================================
+
+======================================================================
+                          Evaluation Results                          
+======================================================================
+Data file:              /home/mczap/GraphBert/GraphBERT/data/javascript/train.jsonl
+Snippets evaluated:     500
+Snippets skipped:       0
+Total masked tokens:    18155
+----------------------------------------------------------------------
+Top-1 Accuracy:         84.57% (15353/18155)
+Top-5 Accuracy:         93.38% (16953/18155)
+Perplexity:             4.1364
+======================================================================

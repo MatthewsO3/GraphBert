@@ -1,0 +1,18 @@
+{
+  "snippets_evaluated": 500,
+  "total_masked_tokens": 20107,
+  "top1_accuracy": 0.8461729745859651,
+  "top5_accuracy": 0.933008405033073,
+  "perplexity": 4.148933424970167,
+  "top1_correct": 17014,
+  "top5_correct": 18760,
+  "snippets_skipped": 0,
+  "config": {
+    "data_file": "/home/mczap/GraphBert/GraphBERT/data/python/train.jsonl",
+    "max_examples": 500,
+    "mask_ratio": 0.15,
+    "top_k": 10,
+    "max_seq_length": 512,
+    "model_checkpoint": "/home/mczap/GraphBert/GraphBERT/models/20k_20k_mixed_retokenized/best_model"
+  }
+}

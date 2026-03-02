@@ -40,7 +40,9 @@ models/
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
-
+models_erlang3_cpp3_train/
+models_erlang1_cpp1_train/
+models_erlang2_cpp2_train/
 # Unit test / coverage reports
 htmlcov/
 .tox/
