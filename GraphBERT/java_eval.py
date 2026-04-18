@@ -1,4 +1,4 @@
-#python java_eval.py --data_file /home/mczap/GraphBert/GraphBERT/data/java/train.jsonl --model_checkpoint /home/mczap/GraphBert/GraphBERT/models/20k_20k_mixed_retokenized/best_model --mask_ratio 0.15 --top_k 10 --max_examples 500  --max_seq_length 512 --output_file results/testing_new_perplexity/20k-20k_retokenized/evaluation_results_java.json"
+#python java_eval.py --data_file /home/mczap/GraphBert/GraphBERT/data/java/test.jsonl --model_checkpoint microsoft/graphcodebert-base --mask_ratio 0.15 --top_k 10 --max_examples 2500  --max_seq_length 512 --output_file results/testing_new_perplexity/20k-20k_retokenized/evaluation_results_java.json
 
 import json
 import os
@@ -28,15 +28,13 @@ torch.manual_seed(42)
 def find_project_root(start_path: Path = None) -> Path:
     if start_path is None:
         start_path = Path(__file__).parent.absolute()
-
     current = start_path
     while True:
         config_path = current / 'config.json'
         if config_path.exists():
             return current
-
         parent = current.parent
-        if parent == current:  # Reached filesystem root
+        if parent == current:
             raise FileNotFoundError(
                 "Could not find project root. "
                 "Make sure config.json exists in the project root directory."
@@ -47,7 +45,6 @@ def find_project_root(start_path: Path = None) -> Path:
 def load_config() -> Dict:
     project_root = find_project_root()
     config_path = project_root / 'config.json'
-
     if os.path.exists(config_path):
         with open(config_path, 'r') as f:
             return json.load(f)
@@ -56,66 +53,49 @@ def load_config() -> Dict:
 
 
 def load_test_snippets_from_jsonl(jsonl_file: str, max_examples: Optional[int] = None) -> List[str]:
-    """
-    Load code snippets from a JSONL file.
-    
-    Args:
-        jsonl_file: Path to JSONL file (relative to project root or absolute)
-        max_examples: Maximum number of examples to load (None = all)
-    
-    Returns:
-        List of code strings
-    """
     project_root = find_project_root()
-    
-    # Try to resolve path
     if os.path.isabs(jsonl_file):
         file_path = Path(jsonl_file)
     else:
         file_path = project_root / jsonl_file
-    
     if not file_path.exists():
         raise FileNotFoundError(f"JSONL file not found: {file_path}")
-    
+
     snippets = []
     print(f"Loading snippets from {file_path}...")
-    
     with open(file_path, 'r', encoding='utf-8') as f:
         for i, line in enumerate(f):
             if max_examples and i >= max_examples:
                 break
-            
             try:
                 data = json.loads(line.strip())
-                # Try 'code' field first, then fall back to 'code' or other fields
                 code = data.get('code') or data.get('source_code')
                 if code:
                     snippets.append(code)
             except json.JSONDecodeError:
                 print(f"Warning: Line {i+1} is not valid JSON, skipping")
                 continue
-    
     print(f"Successfully loaded {len(snippets)} snippets from {file_path}\n")
     return snippets
 
 
 class MLMEvaluator:
-    def __init__(self, model_path: str, tokenizer: RobertaTokenizer, device: Optional[str] = None, max_seq_length: int = 512):
+    def __init__(self, model_path: str, tokenizer: RobertaTokenizer,
+                 device: Optional[str] = None, max_seq_length: int = 512):
         if not TS_AVAILABLE:
             raise RuntimeError("Tree-sitter is required for evaluation.")
 
         self.device = torch.device(device or ('cuda' if torch.cuda.is_available() else 'cpu'))
         self.max_seq_length = max_seq_length
-        self.max_code_tokens = max_seq_length - 2  # Reserve 2 for [CLS] and [SEP]
-        
+        self.max_code_tokens = max_seq_length - 2
+
         print(f"Using device: {self.device}")
         print(f"Max sequence length: {max_seq_length}")
         print(f"Loading model from {model_path}...")
 
         self.tokenizer = tokenizer
         self.is_pretrained = model_path in ["microsoft/graphcodebert-base"] or "/" in model_path
-        
-        # Try to load as HuggingFace pretrained model first (includes HuggingFace Hub models)
+
         try:
             self.model = RobertaForMaskedLM.from_pretrained(model_path).to(self.device).eval()
             source = "HuggingFace Hub" if self.is_pretrained else "local checkpoint"
@@ -123,25 +103,17 @@ class MLMEvaluator:
         except Exception as e:
             print(f"Failed to load from HuggingFace: {e}")
             print("Trying custom format...")
-            
-            # Load custom format: model.bin with {'model_state_dict': ..., 'config': ...}
-            import os
             model_bin_path = os.path.join(model_path, 'model.bin')
-            
             if not os.path.exists(model_bin_path):
                 raise FileNotFoundError(f"No model file found in {model_path}")
-            
             checkpoint = torch.load(model_bin_path, map_location=self.device, weights_only=False)
-            
             if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-                # Our custom format
                 from transformers import RobertaConfig
                 config_dict = checkpoint.get('config', {})
                 if isinstance(config_dict, dict):
                     config = RobertaConfig(**config_dict)
                 else:
                     config = config_dict
-                
                 self.model = RobertaForMaskedLM(config).to(self.device)
                 self.model.load_state_dict(checkpoint['model_state_dict'], strict=False)
                 print("Model loaded successfully (custom format)!\n")
@@ -167,8 +139,10 @@ class MLMEvaluator:
         def is_def(node):
             p = node.parent
             return p and (p.type in ['local_variable_declaration', 'enhanced_for_statement',
-                                      'formal_parameter', 'method_declaration', 'catch_formal_parameter'] or
-                          (p.type == 'assignment_expression' and node == p.child_by_field_name('left')))
+                                      'formal_parameter', 'method_declaration',
+                                      'catch_formal_parameter'] or
+                          (p.type == 'assignment_expression' and
+                           node == p.child_by_field_name('left')))
 
         def find_vars(node):
             if node.type in ['identifier']:
@@ -188,7 +162,6 @@ class MLMEvaluator:
                 preds = [d for d in def_positions if d < use_pos]
                 if preds:
                     edges.append((name, use_pos, "comesFrom", [name], [preds[-1]]))
-
         return edges
 
     def preprocess_for_graphcodebert(self, code: str, masked_code_tokens: List[str]):
@@ -216,93 +189,88 @@ class MLMEvaluator:
         mask = np.zeros((len(ids), len(ids)), dtype=bool)
         code_len = len(masked_code_tokens) + 2
         mask[:code_len, :code_len] = True
-
         for i in range(len(ids)):
             mask[i, i] = True
-
         for i, (_, code_pos) in enumerate(nodes):
             if code_pos < len(masked_code_tokens):
                 dfg_abs, code_abs = dfg_start + i, code_pos + 1
                 mask[dfg_abs, code_abs] = mask[code_abs, dfg_abs] = True
-
         for i, adjs in adj.items():
             for j in adjs:
                 u, v = dfg_start + i, dfg_start + j
                 mask[u, v] = mask[v, u] = True
 
         return {
-            'input_ids': torch.tensor([ids]),
+            'input_ids':      torch.tensor([ids]),
             'attention_mask': torch.tensor([mask.tolist()]),
-            'position_ids': torch.tensor([pos_ids])
+            'position_ids':   torch.tensor([pos_ids])
         }
 
     def evaluate_snippet(self, code: str, mask_ratio: float, top_k: int) -> Optional[Dict]:
-        """
-        Evaluate MLM performance on a code snippet.
-        
-        Args:
-            code: Source code string
-            mask_ratio: Ratio of tokens to mask (0.0-1.0)
-            top_k: Number of top predictions to consider
-        
-        Returns:
-            Dictionary with evaluation results or None if snippet fails
-        """
-        code_tokens = self.tokenizer.tokenize(code, add_prefix_space=True)
+        # FIX 1: removed add_prefix_space=True
+        code_tokens = self.tokenizer.tokenize(code)
         if not code_tokens:
             return None
 
-        # Truncate to fit within model's max sequence length
         if len(code_tokens) > self.max_code_tokens:
             code_tokens = code_tokens[:self.max_code_tokens]
 
-        # Ensure minimum tokens for masking
         if len(code_tokens) < 2:
             return None
 
-        num_mask = max(1, int(len(code_tokens) * mask_ratio))
-        
-        # Ensure we don't try to mask more tokens than available
-        if num_mask > len(code_tokens):
-            num_mask = len(code_tokens)
-        
-        if num_mask < 1:
-            return None
-        
-        try:
-            mask_pos = sorted(random.sample(range(len(code_tokens)), num_mask))
-        except ValueError:
-            # Can't sample: not enough tokens
-            return None
-        
-        orig_tokens = [code_tokens[i] for i in mask_pos]
-        masked_tokens = code_tokens.copy()
+        # FIX 2: skip trivial tokens (whitespace-only, newlines, single chars)
+        candidate_positions = [
+            i for i, tok in enumerate(code_tokens)
+            if len(tok.replace("Ġ", "").replace("Ċ", "").replace("Â", "")) > 1
+        ]
 
+        if not candidate_positions:
+            return None
+
+        num_mask = max(1, int(len(candidate_positions) * mask_ratio))
+
+        try:
+            mask_pos = sorted(random.sample(candidate_positions, min(num_mask, len(candidate_positions))))
+        except ValueError:
+            return None
+
+        # FIX 3: capture token IDs at masking time
+        orig_tokens = []
+        orig_ids    = []
+        for i in mask_pos:
+            tok    = code_tokens[i]
+            tok_id = self.tokenizer.convert_tokens_to_ids(tok)
+            orig_tokens.append(tok)
+            orig_ids.append(tok_id if tok_id != self.tokenizer.unk_token_id else None)
+
+        masked_tokens = code_tokens.copy()
         for pos in mask_pos:
             masked_tokens[pos] = self.tokenizer.mask_token
 
         try:
             inputs = self.preprocess_for_graphcodebert(code, masked_tokens)
-        except Exception as e:
-            # Skip snippets that fail preprocessing
+        except Exception:
             return None
 
         with torch.no_grad():
             try:
                 logits = self.model(**{k: v.to(self.device) for k, v in inputs.items()}).logits
-            except RuntimeError as e:
-                # Skip snippets that cause tensor size errors
+            except RuntimeError:
                 return None
 
         top1_correct, top5_correct, log_probs = 0, 0, []
 
         for i, pos in enumerate(mask_pos):
-            probs = torch.softmax(logits[0, pos + 1], dim=-1)
+            # Skip tokens that weren't in the vocabulary
+            if orig_ids[i] is None:
+                continue
+
+            probs      = torch.softmax(logits[0, pos + 1], dim=-1)
             top_probs, top_indices = torch.topk(probs, min(top_k, len(probs)))
             orig_token = orig_tokens[i]
-            top_preds = self.tokenizer.convert_ids_to_tokens(top_indices)
+            top_preds  = self.tokenizer.convert_ids_to_tokens(top_indices)
 
-            # Accuracy: scan top-k list as before
+            # Accuracy: scan top-k list
             for rank, pred in enumerate(top_preds, 1):
                 if pred == orig_token:
                     if rank == 1:
@@ -311,37 +279,36 @@ class MLMEvaluator:
                         top5_correct += 1
                     break
 
-            # Perplexity: look up the true probability directly, NOT from top-k
-            correct_id = self.tokenizer.convert_tokens_to_ids(orig_token)
-            correct_prob = probs[correct_id].item()
+            # Perplexity: use stored ID directly, never re-lookup
+            correct_prob = probs[orig_ids[i]].item()
             log_probs.append(np.log(max(correct_prob, 1e-9)))
+
+        if not log_probs:
+            return None
 
         return {
             'top1_correct': top1_correct,
             'top5_correct': top5_correct,
-            'num_masked': num_mask,
-            'log_probs': log_probs
+            'num_masked':   len(log_probs),  # excludes skipped unk tokens
+            'log_probs':    log_probs
         }
 
 
 def save_evaluation_results(results: Dict, output_path: Path):
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
     results_serializable = {
-        'snippets_evaluated': results['snippets_evaluated'],
+        'snippets_evaluated':  results['snippets_evaluated'],
         'total_masked_tokens': results['total_masked_tokens'],
-        'top1_accuracy': float(results['top1_accuracy']),
-        'top5_accuracy': float(results['top5_accuracy']),
-        'perplexity': float(results['perplexity']),
-        'top1_correct': int(results['top1_correct']),
-        'top5_correct': int(results['top5_correct']),
-        'snippets_skipped': results.get('snippets_skipped', 0),
-        'config': results.get('config', {})
+        'top1_accuracy':       float(results['top1_accuracy']),
+        'top5_accuracy':       float(results['top5_accuracy']),
+        'perplexity':          float(results['perplexity']),
+        'top1_correct':        int(results['top1_correct']),
+        'top5_correct':        int(results['top5_correct']),
+        'snippets_skipped':    results.get('snippets_skipped', 0),
+        'config':              results.get('config', {})
     }
-
     with open(output_path, 'w') as f:
         json.dump(results_serializable, f, indent=2)
-
     print(f"Evaluation results saved to: {output_path}")
 
 
@@ -349,53 +316,18 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description='Evaluate GraphCodeBERT MLM model on Python code from JSONL file'
+        description='Evaluate GraphCodeBERT MLM model on Java code from JSONL file'
     )
-    parser.add_argument(
-        '--data_file',
-        type=str,
-        default=None,
-        help='Path to JSONL file with test data (relative to project root or absolute)'
-    )
-    parser.add_argument(
-        '--max_examples',
-        type=int,
-        default=None,
-        help='Maximum number of examples to evaluate (None = all)'
-    )
-    parser.add_argument(
-        '--mask_ratio',
-        type=float,
-        default=None,
-        help='Ratio of tokens to mask'
-    )
-    parser.add_argument(
-        '--top_k',
-        type=int,
-        default=None,
-        help='Top-k predictions to consider'
-    )
-    parser.add_argument(
-        '--model_checkpoint',
-        type=str,
-        default='best_model',
-        help='Model checkpoint name or HuggingFace model ID'
-    )
-    parser.add_argument(
-        '--output_file',
-        type=str,
-        default=None,
-        help='Path to save evaluation results (relative to project root)'
-    )
-    parser.add_argument(
-        '--max_seq_length',
-        type=int,
-        default=512,
-        help='Maximum sequence length for model (default 512)'
-    )
+    parser.add_argument('--data_file',        type=str,   default=None)
+    parser.add_argument('--max_examples',     type=int,   default=None)
+    parser.add_argument('--mask_ratio',       type=float, default=None)
+    parser.add_argument('--top_k',            type=int,   default=None)
+    parser.add_argument('--model_checkpoint', type=str,   default='best_model')
+    parser.add_argument('--output_file',      type=str,   default=None)
+    parser.add_argument('--max_seq_length',   type=int,   default=512)
 
     try:
-        config = load_config()
+        config       = load_config()
         project_root = find_project_root()
     except FileNotFoundError as e:
         print(f"Error: {e}")
@@ -406,7 +338,7 @@ def main():
     args = parser.parse_args()
 
     print("\n" + "=" * 70)
-    print("GraphCodeBERT MLM Evaluation (Python, from JSONL)".center(70))
+    print("GraphCodeBERT MLM Evaluation (Java, from JSONL)".center(70))
     print("=" * 70)
     print(f"Project root: {project_root}")
     print("\nEvaluation Configuration:")
@@ -414,55 +346,31 @@ def main():
         print(f"  {k}: {v}")
     print("=" * 70 + "\n")
 
-    # Get data file from args or config
-    data_file = args.data_file
-    if data_file is None:
-        data_file = eval_config.get('data_file', None)
-    
+    data_file = args.data_file or eval_config.get('data_file', None)
     if data_file is None:
         print("Error: --data_file must be specified (either as argument or in config)")
         exit(1)
 
-    # Get max examples from args or config
-    max_examples = args.max_examples
-    if max_examples is None:
-        max_examples = eval_config.get('max_examples', None)
-
-    # Get mask ratio from args or config
-    mask_ratio = args.mask_ratio
-    if mask_ratio is None:
-        mask_ratio = eval_config.get('mask_ratio', 0.15)
-
-    # Get top_k from args or config
-    top_k = args.top_k
-    if top_k is None:
-        top_k = eval_config.get('top_k', 10)
-
-    # Get max_seq_length from args or config
-    max_seq_length = args.max_seq_length
-    if max_seq_length is None:
-        max_seq_length = eval_config.get('max_seq_length', 512)
+    max_examples   = args.max_examples   or eval_config.get('max_examples', None)
+    mask_ratio     = args.mask_ratio     or eval_config.get('mask_ratio', 0.15)
+    top_k          = args.top_k          or eval_config.get('top_k', 10)
+    max_seq_length = args.max_seq_length or eval_config.get('max_seq_length', 512)
 
     print("Loading tokenizer from 'microsoft/graphcodebert-base'...")
     tokenizer = RobertaTokenizer.from_pretrained("microsoft/graphcodebert-base")
 
-    # Determine if model_checkpoint is a HuggingFace model ID or local path
     if args.model_checkpoint.startswith("microsoft/") or "/" in args.model_checkpoint:
-        # HuggingFace model ID - use directly
         model_path = args.model_checkpoint
         print(f"Using HuggingFace model: {model_path}")
     else:
-        # Local checkpoint - construct full path
         output_dir = project_root / config.get('train', {}).get('output_dir', 'results')
         model_path = output_dir / args.model_checkpoint
-
         if not model_path.exists():
             print(f"Error: Model checkpoint not found at {model_path}")
             exit(1)
 
     print(f"Model path: {model_path}\n")
 
-    # Load snippets from JSONL file
     try:
         snippets_to_evaluate = load_test_snippets_from_jsonl(data_file, max_examples)
     except FileNotFoundError as e:
@@ -478,45 +386,44 @@ def main():
     aggregated_results = {
         'total_top1_correct': 0,
         'total_top5_correct': 0,
-        'total_masked': 0,
-        'all_log_probs': [],
-        'snippets_skipped': 0
+        'total_masked':       0,
+        'all_log_probs':      [],
+        'snippets_skipped':   0
     }
 
     print(f"Evaluating {len(snippets_to_evaluate)} snippets...\n")
 
-    for i, snippet in enumerate(tqdm(snippets_to_evaluate, desc="Evaluating"), 1):
+    for snippet in tqdm(snippets_to_evaluate, desc="Evaluating"):
         results = evaluator.evaluate_snippet(snippet, mask_ratio, top_k)
-
         if results:
             aggregated_results['total_top1_correct'] += results['top1_correct']
             aggregated_results['total_top5_correct'] += results['top5_correct']
-            aggregated_results['total_masked'] += results['num_masked']
+            aggregated_results['total_masked']       += results['num_masked']
             aggregated_results['all_log_probs'].extend(results['log_probs'])
         else:
             aggregated_results['snippets_skipped'] += 1
 
     if aggregated_results['total_masked'] > 0:
         total_masked = aggregated_results['total_masked']
-        top1_acc = aggregated_results['total_top1_correct'] / total_masked
-        top5_acc = aggregated_results['total_top5_correct'] / total_masked
+        top1_acc   = aggregated_results['total_top1_correct'] / total_masked
+        top5_acc   = aggregated_results['total_top5_correct'] / total_masked
         perplexity = np.exp(-np.mean(aggregated_results['all_log_probs']))
 
         results_dict = {
-            'snippets_evaluated': len(snippets_to_evaluate),
-            'snippets_skipped': aggregated_results['snippets_skipped'],
+            'snippets_evaluated':  len(snippets_to_evaluate),
+            'snippets_skipped':    aggregated_results['snippets_skipped'],
             'total_masked_tokens': total_masked,
-            'top1_correct': aggregated_results['total_top1_correct'],
-            'top5_correct': aggregated_results['total_top5_correct'],
-            'top1_accuracy': top1_acc,
-            'top5_accuracy': top5_acc,
-            'perplexity': perplexity,
+            'top1_correct':        aggregated_results['total_top1_correct'],
+            'top5_correct':        aggregated_results['total_top5_correct'],
+            'top1_accuracy':       top1_acc,
+            'top5_accuracy':       top5_acc,
+            'perplexity':          perplexity,
             'config': {
-                'data_file': data_file,
-                'max_examples': max_examples,
-                'mask_ratio': mask_ratio,
-                'top_k': top_k,
-                'max_seq_length': max_seq_length,
+                'data_file':        data_file,
+                'max_examples':     max_examples,
+                'mask_ratio':       mask_ratio,
+                'top_k':            top_k,
+                'max_seq_length':   max_seq_length,
                 'model_checkpoint': args.model_checkpoint
             }
         }
@@ -534,17 +441,15 @@ def main():
         print(f"Perplexity:             {perplexity:.4f}")
         print("=" * 70 + "\n")
 
-        # Determine output path
         if args.output_file:
             if os.path.isabs(args.output_file):
                 results_path = Path(args.output_file)
             else:
                 results_path = project_root / args.output_file
         else:
-            # Default: use results directory
-            output_dir = project_root / config.get('train', {}).get('output_dir', 'results')
-            results_path = output_dir / 'evaluation_results_python.json'
-        
+            output_dir   = project_root / config.get('train', {}).get('output_dir', 'results')
+            results_path = output_dir / 'evaluation_results_java.json'
+
         save_evaluation_results(results_dict, results_path)
     else:
         print("No valid results to report.")

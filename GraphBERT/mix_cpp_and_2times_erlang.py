@@ -52,9 +52,9 @@ def merge_balanced_cpp_erlang(
 
 
 merge_balanced_cpp_erlang(
-    cpp_file="/home/mczap/GraphBert/GraphBERT/data/train.jsonl",
-    erlang_file="/home/mczap/erlangbert/erlang_corpus_scraper/output/graphcodebert_data/train.jsonl",
-    output_file="data/mixed_cpp_2x_erlang_train.jsonl",
-    max_cpp=20000,
-    max_erlang=10000,
+    cpp_file="/home/mczap/GraphBert/GraphBERT/data/mixed_cpp_2x_erlang_train.jsonl",
+    erlang_file="/home/mczap/GraphBert/GraphBERT/data/erlang/retokenized_train.jsonl",
+    output_file="data/50_2x25mix/train.jsonl",
+    max_cpp=256000,
+    max_erlang=128000,
 )

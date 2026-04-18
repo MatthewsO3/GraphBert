@@ -141,6 +141,7 @@ def build_graphcodebert_inputs(
         'position_ids':   torch.tensor([pos_ids]),
     }
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Evaluator
 # ─────────────────────────────────────────────────────────────────────────────
@@ -166,16 +167,37 @@ class MLMEvaluator:
         code_tokens = [t for t in code_tokens if t not in
                     (self.tokenizer.cls_token, self.tokenizer.sep_token)]
 
-        # Pre-truncate here too so mask_pos indices stay valid after truncation
+        # Pre-truncate so mask_pos indices stay valid after truncation
         MAX_CODE    = max_length - min(64, max_length // 4) - 3
         code_tokens = code_tokens[:MAX_CODE]
 
         if not code_tokens:
             return None
 
-        num_mask  = max(1, int(len(code_tokens) * mask_ratio))
-        mask_pos  = sorted(random.sample(range(len(code_tokens)), num_mask))
-        orig_toks = [code_tokens[i] for i in mask_pos]
+        # FIX 1: Skip trivial tokens (whitespace-only, newlines, single chars)
+        # to match the reference script's behavior and get comparable perplexity numbers
+        candidate_positions = [
+            i for i, tok in enumerate(code_tokens)
+            if len(tok.replace("Ġ", "").replace("Ċ", "").replace("Â", "")) > 1
+        ]
+
+        if not candidate_positions:
+            return None
+
+        num_mask = max(1, int(len(candidate_positions) * mask_ratio))
+        mask_pos = sorted(random.sample(candidate_positions, min(num_mask, len(candidate_positions))))
+
+        # FIX 2: Capture token IDs at masking time (same source as the token string),
+        # so we never risk a mismatched unk_token_id lookup later
+        orig_toks = []
+        orig_ids  = []
+        for i in mask_pos:
+            tok    = code_tokens[i]
+            tok_id = self.tokenizer.convert_tokens_to_ids(tok)
+            orig_toks.append(tok)
+            # If the token isn't in the vocab it resolves to unk — flag it so we
+            # can skip it rather than measure the wrong probability
+            orig_ids.append(tok_id if tok_id != self.tokenizer.unk_token_id else None)
 
         masked_tokens = code_tokens.copy()
         for pos in mask_pos:
@@ -192,12 +214,16 @@ class MLMEvaluator:
         log_probs: List[float] = []
 
         for i, pos in enumerate(mask_pos):
-            probs = torch.softmax(logits[0, pos + 1], dim=-1)
+            # Skip tokens that weren't in the vocabulary
+            if orig_ids[i] is None:
+                continue
+
+            probs      = torch.softmax(logits[0, pos + 1], dim=-1)
             top_probs, top_indices = torch.topk(probs, top_k)
             orig_token = orig_toks[i]
-            top_preds = self.tokenizer.convert_ids_to_tokens(top_indices)
+            top_preds  = self.tokenizer.convert_ids_to_tokens(top_indices)
 
-            # Accuracy: scan top-k list as before
+            # Accuracy: scan top-k list
             for rank, pred in enumerate(top_preds, 1):
                 if pred == orig_token:
                     if rank == 1:
@@ -206,15 +232,17 @@ class MLMEvaluator:
                         top5_correct += 1
                     break
 
-            # Perplexity: look up the true probability directly, NOT from top-k
-            correct_id = self.tokenizer.convert_tokens_to_ids(orig_token)
-            correct_prob = probs[correct_id].item()
+            # Perplexity: use the stored ID directly, never re-lookup
+            correct_prob = probs[orig_ids[i]].item()
             log_probs.append(np.log(max(correct_prob, 1e-9)))
+
+        if not log_probs:
+            return None
 
         return {
             'top1_correct': top1_correct,
             'top5_correct': top5_correct,
-            'num_masked':   num_mask,
+            'num_masked':   len(log_probs),   # actual evaluated count (excludes skipped unk tokens)
             'log_probs':    log_probs,
         }
 
@@ -263,7 +291,7 @@ def evaluate_dataset(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Printing & saving  (identical style to evaluate.py)
+# Printing & saving
 # ─────────────────────────────────────────────────────────────────────────────
 
 def print_results(label: str, metrics: Dict):
@@ -301,10 +329,10 @@ def main():
     parser = argparse.ArgumentParser(
         description='Evaluate GraphCodeBERT on cpp_val.jsonl and erlang_val.jsonl'
     )
-    parser.add_argument('--cpp_val',          type=str,   default="/home/mczap/GraphBert/GraphBERT/data/val.jsonl")
-    parser.add_argument('--erlang_val',       type=str,   default="/home/mczap/GraphBert/GraphBERT/data/erlang_val_retokenized.jsonl")
-    parser.add_argument('--mask_ratio',       type=float, default=0.15)
-    parser.add_argument('--top_k',            type=int,   default=10)
+    parser.add_argument('--cpp_val',          type=str,   default=None)
+    parser.add_argument('--erlang_val',       type=str,   default=None)
+    parser.add_argument('--mask_ratio',       type=float, default=None)
+    parser.add_argument('--top_k',            type=int,   default=None)
     parser.add_argument('--model',            type=str,   default=None,
                         help='HuggingFace model ID (e.g. microsoft/graphcodebert-base) '
                              'OR local path. Overrides --model_checkpoint.')
@@ -312,6 +340,8 @@ def main():
                         help='Checkpoint folder name inside output_dir '
                              '(used when --model is not set)')
     parser.add_argument('--max_samples',      type=int,   default=None)
+    parser.add_argument('--output_dir', type=str, default=None,
+                    help='Directory to save evaluation results. Defaults to config train output_dir.')
 
     try:
         config       = load_config()
@@ -323,17 +353,25 @@ def main():
     parser.set_defaults(**config.get('evaluate', {}))
     args = parser.parse_args()
 
-    output_dir      = project_root / config.get('train', {}).get('output_dir', 'models')
+    # Fixed: properly assign final_output_dir in both branches
+    if args.output_dir:
+        final_output_dir = Path(args.output_dir)
+    else:
+        # Fallback to config or 'models' default
+        config_output = config.get('train', {}).get('output_dir', 'models')
+        final_output_dir = project_root / config_output
+
+    # Ensure the directory exists
+    final_output_dir.mkdir(parents=True, exist_ok=True)
     cpp_val_path    = project_root / (args.cpp_val    or 'data/cpp_val.jsonl')
     erlang_val_path = project_root / (args.erlang_val or 'data/erlang_val.jsonl')
 
     # ── Resolve model path ────────────────────────────────────────────────────
-    # --model takes priority; falls back to output_dir / --model_checkpoint
     if args.model:
-        model_path     = args.model          # HuggingFace ID or absolute/relative path
+        model_path     = args.model
         model_path_str = args.model
     else:
-        local_path     = output_dir / args.model_checkpoint
+        local_path = final_output_dir / args.model_checkpoint
         if not local_path.exists():
             print(f"Error: model checkpoint not found at {local_path}")
             print(f"  Tip: pass --model microsoft/graphcodebert-base to use the base model")
@@ -407,7 +445,8 @@ def main():
         }
         print_results('Combined (C++ + Erlang)', combined_results['combined'])
 
-    save_results(combined_results, output_dir / 'evaluation_results_val_new_perplexity_base.json')
-    
+        # Replace the old save_results line with:
+        save_results(combined_results, final_output_dir / 'evaluation_results_val.json')
+
 if __name__ == "__main__":
     main()

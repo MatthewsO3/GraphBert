@@ -24,7 +24,6 @@ This is O(n) per sample and handles multi-char and Unicode tokens correctly.
 
 import json
 import random
-from pathlib import Path  # Add this at the top of your script
 from typing import Optional
 from transformers import RobertaTokenizerFast   # Fast variant gives offset maps
 
@@ -202,7 +201,6 @@ def load_jsonl(path: str) -> list:
 
 
 def save_jsonl(samples: list, path: str) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         for s in samples:
             fh.write(json.dumps(s, ensure_ascii=False) + "\n")
@@ -244,75 +242,58 @@ def verify_sample(original: dict, realigned: dict) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
-def merge_balanced(
-    cpp_file:         str,
+def retokenize_erlang_only(
     erlang_file:      str,
     output_file:      str,
-    max_per_language: Optional[int] = None,
+    max_samples:      Optional[int] = None,
     seed:             int = 42,
-    verify_first_n:   int = 2,      # print alignment check for first N Erlang samples
+    verify_first_n:   int = 5,
 ) -> None:
     rng = random.Random(seed)
 
-    # -- C++ (no retokenization needed) --------------------------------------
-    cpp_samples = load_jsonl(cpp_file)
-    if max_per_language and len(cpp_samples) > max_per_language:
-        cpp_samples = rng.sample(cpp_samples, max_per_language)
-        print(f"C++    : sampled {max_per_language:,} from {cpp_file}")
-    else:
-        print(f"C++    : loaded  {len(cpp_samples):,} samples from {cpp_file}")
-
-    # -- Erlang (retokenize + realign) ---------------------------------------
+    # -- Load Erlang ---------------------------------------------------------
     erlang_raw = load_jsonl(erlang_file)
-    if max_per_language and len(erlang_raw) > max_per_language:
-        erlang_raw = rng.sample(erlang_raw, max_per_language)
-        print(f"Erlang : sampled {max_per_language:,} from {erlang_file}")
+    if max_samples and len(erlang_raw) > max_samples:
+        erlang_raw = rng.sample(erlang_raw, max_samples)
+        print(f"Erlang : sampled {max_samples:,} from {erlang_file}")
     else:
         print(f"Erlang : loaded  {len(erlang_raw):,} samples from {erlang_file}")
 
+    # -- Retokenize & Realign ------------------------------------------------
     print("Retokenizing & realigning Erlang samples ...")
-    erlang_samples = []
-    unmapped_total  = 0
+    erlang_retokenized = []
+    unmapped_total = 0
 
     for i, raw in enumerate(erlang_raw):
         realigned = realign_sample(raw)
-        erlang_samples.append(realigned)
+        erlang_retokenized.append(realigned)
 
-        # Count unmapped positions for a summary report
+        # Summary for unmapped positions
         for entry in realigned.get("variable_positions", []):
             if "__pos_unmapped__" in entry:
                 unmapped_total += 1
 
-        # Optionally print a verification table for the first few samples
+        # Print verification for the first few
         if i < verify_first_n:
-            print(f"\n[Sample {i}]  func={raw.get('func_name', raw.get('idx', '?'))}")
+            print(f"\n[Sample {i}]  idx={raw.get('idx', '?')}")
             verify_sample(raw, realigned)
 
         if (i + 1) % 1000 == 0:
             print(f"  ... {i + 1:,} / {len(erlang_raw):,} done")
 
-    print(f"Retokenization complete.  Unmapped positions: {unmapped_total}")
-
-    # -- Merge & shuffle -----------------------------------------------------
-    all_samples = cpp_samples + erlang_samples
-    rng.shuffle(all_samples)
-
-    save_jsonl(all_samples, output_file)
-    print(
-        f"\nTotal : {len(all_samples):,} samples "
-        f"({len(cpp_samples):,} C++ + {len(erlang_samples):,} Erlang) "
-        f"written to {output_file}"
-    )
+    # -- Save Output ---------------------------------------------------------
+    save_jsonl(erlang_retokenized, output_file)
+    
+    print(f"\nRetokenization complete.")
+    print(f"Unmapped positions total: {unmapped_total}")
+    print(f"Final file: {output_file} ({len(erlang_retokenized):,} samples)")
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    merge_balanced(
-        cpp_file         = "/home/mczap/GraphBert/GraphBERT/data/mixed_cpp_2x_erlang_train.jsonl",
-        erlang_file      = "/home/mczap/GraphBert/GraphBERT/data/erlang/retokenized_train.jsonl",
-        output_file      = "data/50_50mix/train.jsonl",
-        max_per_language = 256000,   # set to None to use all samples
-        verify_first_n   = 5,       # set to 0 to skip verification output
+    # Update these paths for your Erlang-only run
+    retokenize_erlang_only(
+        erlang_file      = "/home/mczap/erlangbert/erlang_corpus_scraper/output/graphcodebert_data/full.jsonl",
+        output_file      = "/home/mczap/GraphBert/GraphBERT/data/erlang/retokenized_train.jsonl",
+        max_samples      = None,  # Use all samples
+        verify_first_n   = 5      # Keep this on to ensure the first 5 look good
     )

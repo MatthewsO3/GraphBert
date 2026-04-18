@@ -552,7 +552,7 @@ def main():
     parser.add_argument('--validation_split', type=float, default=None, help='Validation split ratio')
     parser.add_argument('--weight_decay', type=float, default=0.01, help='Weight decay')
     parser.add_argument('--early_stopping_patience', type=int, default=3, help='Early stopping patience')
-    parser.add_argument('--use_amp', action='store_true', help='Use mixed precision training')
+    parser.add_argument('--use_amp', default=True, action='store_true', help='Use mixed precision training')
 
     project_root = load_config_and_set_defaults(parser)
     args = parser.parse_args()

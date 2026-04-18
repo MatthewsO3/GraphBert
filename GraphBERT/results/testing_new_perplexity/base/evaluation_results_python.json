@@ -1,0 +1,18 @@
+{
+  "snippets_evaluated": 500,
+  "total_masked_tokens": 20107,
+  "top1_accuracy": 0.7585915352862187,
+  "top5_accuracy": 0.8388123539065997,
+  "perplexity": 9.695118901884076,
+  "top1_correct": 15253,
+  "top5_correct": 16866,
+  "snippets_skipped": 0,
+  "config": {
+    "data_file": "/home/mczap/GraphBert/GraphBERT/data/python/train.jsonl",
+    "max_examples": 500,
+    "mask_ratio": 0.15,
+    "top_k": 10,
+    "max_seq_length": 512,
+    "model_checkpoint": "microsoft/graphcodebert-base"
+  }
+}

@@ -62,3 +62,6 @@ Top-1 Accuracy:         84.57% (15353/18155)
 Top-5 Accuracy:         93.38% (16953/18155)
 Perplexity:             4.1364
 ======================================================================
+
+
+python odm_train.py  --cpp_file /home/mczap/GraphBert/GraphBERT/data/mixed_cpp_2x_erlang_train.jsonl --erl_file /home/mczap/GraphBert/GraphBERT/data/erlang/retokenized_train.jsonl  --output_dir "models/final_train/ODM_v2"  --batch_size 32  --epochs 6 --learning_rate 2e-5 --warmup_steps 2000  --odm_alpha 0.95  --odm_warmup_steps 500  --log_interval 100
